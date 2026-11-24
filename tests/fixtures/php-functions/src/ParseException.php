@@ -2,4 +2,4 @@
 
 namespace Acme\Numbers;
 
-final class ParseException extends \RuntimeException {}
+final class ParseException extends ParseFailure {}

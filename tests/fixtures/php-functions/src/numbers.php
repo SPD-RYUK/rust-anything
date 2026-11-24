@@ -2,6 +2,7 @@
 
 namespace Acme\Numbers;
 
+require_once __DIR__ . '/ZParseFailure.php';
 require_once __DIR__ . '/ParseException.php';
 
 function clamp(int $value, int $lo = 0, int $hi = 10): int

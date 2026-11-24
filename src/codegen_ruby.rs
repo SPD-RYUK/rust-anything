@@ -250,7 +250,7 @@ def wrapper_error(fn_name, wrapper)
   return nil if loc && File.realpath(loc) == File.realpath(wrapper)
 
   { "error" => "wrapper did not override #{recv}.#{name} (got #{loc.inspect}, expected #{wrapper.inspect})", "error_type" => "RuntimeError" }
-rescue NameError, SystemCallError => e
+rescue KeyError, NameError, SystemCallError => e
   { "error" => e.message, "error_type" => e.class.name }
 end
 
