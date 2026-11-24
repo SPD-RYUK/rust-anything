@@ -2071,10 +2071,16 @@ fn csharp_static_methods_bridge_record_and_diff() {
         "\"error_type\":\"System.NullReferenceException\"",
         "{\"fn\":\"Mean\",\"args\":[[]],\"error\":\"mean of nothing\",\
          \"error_type\":\"System.InvalidOperationException\"}",
-        "\"error_type\":\"Acme.Geo.Geometry+ParseException\"",
     ] {
         assert!(cases.contains(expected), "{expected}");
     }
+    assert!(
+        cases.lines().any(|line| {
+            let case: serde_json::Value = serde_json::from_str(line).unwrap();
+            case["fn"] == "Digit" && case["error_type"] == "Acme.Geo.Geometry+ParseException"
+        }),
+        "Digit should record the nested exception"
+    );
     assert!(
         cases
             .lines()
@@ -2154,7 +2160,7 @@ fn csharp_static_methods_bridge_record_and_diff() {
     );
     std::fs::write(dir.join("src/port.rs"), port).unwrap();
     harness::build(&dir).unwrap();
-    let diff = harness::diff(&DiffOptions {
+    let (diff, counts) = harness::diff_full_with_counts(&DiffOptions {
         crate_dir: &dir,
         module: None,
         ignore_key_order: false,
@@ -2163,6 +2169,12 @@ fn csharp_static_methods_bridge_record_and_diff() {
     })
     .unwrap();
     assert_eq!(diff.total, recorded.cases);
+    let (passed, total) = counts["Digit"];
+    assert_eq!(
+        passed, total,
+        "Digit replay mismatches: {:?}",
+        diff.mismatches
+    );
     let unported = cases
         .lines()
         .filter(|l| l.starts_with("{\"fn\":\"FirstIndex\""))

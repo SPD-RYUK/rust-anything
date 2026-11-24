@@ -26,10 +26,6 @@ front door); units cannot be bridged yet.
 Details of every run: [real-world.md](real-world.md) (TS/JS) and
 [real-world-languages.md](real-world-languages.md) (the others).
 
-The PHP loop fixture checks that replay loads a namespaced exception and its parent
-without running the project entrypoint. The Ruby driver fixture checks that a case
-whose target was removed is reported as a mismatch.
-
 ## Commands
 
 | Command | Status | Notes |
