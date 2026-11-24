@@ -182,6 +182,30 @@ fn java_error_lookup_matches_across_json_typed_and_wire_paths() {
 
 fn check_error_lookup(root: &Path) -> anyhow::Result<()> {
     std::fs::write(root.join("RustAnythingError.java"), ERROR_JAVA)?;
+    std::fs::create_dir_all(root.join("com/example"))?;
+    std::fs::write(
+        root.join("com/example/TestException.java"),
+        "package com.example;\n\
+         public final class TestException extends RuntimeException {\n\
+             public TestException(String message) { super(message); }\n\
+         }\n",
+    )?;
+    std::fs::write(
+        root.join("com/example/Outer.java"),
+        "package com.example;\n\
+         public final class Outer {\n\
+             public static final class InnerException extends RuntimeException {\n\
+                 public InnerException(String message) { super(message); }\n\
+             }\n\
+         }\n",
+    )?;
+    std::fs::write(
+        root.join("com/example/NoMsgException.java"),
+        "package com.example;\n\
+         public final class NoMsgException extends RuntimeException {\n\
+             public NoMsgException() { super(\"fixed\"); }\n\
+         }\n",
+    )?;
     std::fs::write(
         root.join("CheckErrors.java"),
         r#"import rustanything.RustAnythingError;
@@ -202,24 +226,43 @@ public class CheckErrors {
         }
         if (fromJson.getClass() != expected || fromReal.getClass() != expected || fromSlot.getClass() != expected) {
             throw new AssertionError("class mismatch for " + type + ": "
-                + fromJson.getClass() + " / " + fromReal.getClass() + " / " + fromSlot.getClass());
+                + fromJson.getClass() + " / " + fromReal.getClass() + " / " + fromSlot.getClass()
+                + " (expected " + expected + ")");
         }
-        if (!fromJson.getMessage().equals(fromReal.getMessage())
-            || !fromJson.getMessage().equals(fromSlot.getMessage())) {
-            throw new AssertionError("message mismatch for " + type);
+        String expectedMessage = expected == RuntimeException.class ? type + ": " + msg : msg;
+        if (!expectedMessage.equals(fromJson.getMessage())
+            || !expectedMessage.equals(fromReal.getMessage())
+            || !expectedMessage.equals(fromSlot.getMessage())) {
+            throw new AssertionError("message mismatch for " + type + ": "
+                + fromJson.getMessage() + " / " + fromReal.getMessage() + " / " + fromSlot.getMessage());
         }
     }
 
     public static void main(String[] args) {
+        // Resolving: packaged, nested, and JDK exception packages with a (String) constructor.
+        checkBoth("com.example.TestException", "bad", com.example.TestException.class);
+        checkBoth("com.example.Outer$InnerException", "nested", com.example.Outer.InnerException.class);
         checkBoth("IllegalArgumentException", "bad", IllegalArgumentException.class);
         checkBoth("NoSuchElementException", "missing", java.util.NoSuchElementException.class);
         checkBoth("DateTimeException", "empty year", java.time.DateTimeException.class);
         checkBoth("java.time.DateTimeException", "empty year", java.time.DateTimeException.class);
         checkBoth("RejectedExecutionException", "busy", java.util.concurrent.RejectedExecutionException.class);
+
+        // Non-resolving: checked, non-exception, missing (String) ctor, unknown, malformed.
+        checkBoth("java.io.IOException", "checked", RuntimeException.class);
+        checkBoth("java.lang.String", "not an exception", RuntimeException.class);
+        checkBoth("com.example.NoMsgException", "no string ctor", RuntimeException.class);
+        checkBoth("UncheckedIOException", "disk", RuntimeException.class);
         checkBoth("NoSuchException", "oops", RuntimeException.class);
-        RuntimeException plain = RustAnythingError.from("bad input: 42");
-        if (plain.getClass() != RuntimeException.class || !plain.getMessage().equals("bad input: 42")) {
-            throw new AssertionError("unexpected plain error: " + plain);
+        checkBoth("bad name", "msg", RuntimeException.class);
+        checkBoth("com.example..Bad", "msg", RuntimeException.class);
+
+        // No ": " separator.
+        for (String raw : new String[] { "plain error", "IllegalArgumentException:bad", "bad input: 42" }) {
+            RuntimeException plain = RustAnythingError.from(raw);
+            if (plain.getClass() != RuntimeException.class || !raw.equals(plain.getMessage())) {
+                throw new AssertionError("unexpected plain error for " + raw + ": " + plain);
+            }
         }
     }
 }
@@ -230,6 +273,9 @@ public class CheckErrors {
         "-d",
         ".",
         "RustAnythingError.java",
+        "com/example/TestException.java",
+        "com/example/Outer.java",
+        "com/example/NoMsgException.java",
         "CheckErrors.java",
     ]))?;
     run(Command::new("java")
