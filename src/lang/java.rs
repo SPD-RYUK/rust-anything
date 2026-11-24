@@ -200,7 +200,7 @@ fn join(dir: &str, rest: &str) -> String {
 
 pub fn scan(source: &str) -> FileFacts {
     let mut facts = FileFacts {
-        loc: syntax::loc(source),
+        loc: syntax::loc(source, crate::lang::Lang::Java),
         ..FileFacts::default()
     };
     let Some(tree) = syntax::parse(&language(), source) else {
@@ -342,23 +342,43 @@ pub fn lookup(name: &str) -> Option<CrateMatch> {
 
 // ---- exports ---------------------------------------------------------------------------------
 
-/// A Java type in the TS-like dialect, or why the bridge cannot carry it.
+fn strip_kw<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
+    let rest = s.strip_prefix(kw)?;
+    if rest.starts_with(char::is_whitespace) {
+        Some(rest.trim_start())
+    } else {
+        None
+    }
+}
+
+/// A Java type in the TS-like dialect (return position), or why the bridge cannot carry it.
 pub fn java_to_ts(t: &str) -> Result<String, String> {
+    java_to_ts_inner(t, false)
+}
+
+/// A Java parameter type in the TS-like dialect: covariant `? extends T` wildcards read as `T`.
+pub fn java_to_ts_param(t: &str) -> Result<String, String> {
+    java_to_ts_inner(t, true)
+}
+
+fn java_to_ts_inner(t: &str, in_param: bool) -> Result<String, String> {
     let t = t.trim();
-    // A wildcard cannot cross the recorder's converter yet: it casts each type argument to
-    // `Class`, so a `WildcardType` throws there. Say which wildcard, instead of calling it a class.
     if let Some(rest) = t.strip_prefix('?') {
         let rest = rest.trim();
-        return Err(
-            if rest.starts_with("super") || rest.starts_with("extends") {
-                format!("uses a wildcard `{t}`")
-            } else {
-                "takes or returns `Object`: values of any type".into()
-            },
-        );
+        if rest.is_empty() {
+            return Err("takes or returns `Object`: values of any type".into());
+        }
+        if in_param
+            && let Some(bound) = strip_kw(rest, "extends")
+            && !bound.is_empty()
+            && !bound.contains('&')
+        {
+            return java_to_ts_inner(bound, true);
+        }
+        return Err(format!("uses a wildcard `{t}`"));
     }
     if let Some(inner) = t.strip_suffix("[]") {
-        return java_to_ts(inner).map(|i| format!("{i}[]"));
+        return java_to_ts_inner(inner, in_param).map(|i| format!("{i}[]"));
     }
     let (head, args) = match t.find('<') {
         Some(i) if t.ends_with('>') => (&t[..i], split_top(&t[i + 1..t.len() - 1])),
@@ -366,8 +386,10 @@ pub fn java_to_ts(t: &str) -> Result<String, String> {
     };
     let head = head.trim().rsplit('.').next().unwrap_or(head);
     let arg = |i: usize| -> Result<String, String> {
-        args.get(i)
-            .map_or_else(|| Err(format!("raw `{head}`")), |a| java_to_ts(a))
+        args.get(i).map_or_else(
+            || Err(format!("raw `{head}`")),
+            |a| java_to_ts_inner(a, in_param),
+        )
     };
     Ok(match head {
         "String" | "CharSequence" => "string".into(),
@@ -537,7 +559,7 @@ pub fn exports(path: &str, source: &str) -> Vec<ExportedFn> {
                         }
                         _ => continue,
                     };
-                    let ts_type = java_to_ts(&ty).unwrap_or_else(|reason| {
+                    let ts_type = java_to_ts_param(&ty).unwrap_or_else(|reason| {
                         blocker.get_or_insert(reason);
                         "unknown".into()
                     });
@@ -629,24 +651,108 @@ mod tests {
     }
 
     #[test]
-    fn a_wildcard_is_named_as_one_and_stays_refused() {
-        // A wildcard is a wildcard, not a class name: the refusal says which one. It stays a refusal
-        // because the recorder's converter casts each type argument to `Class`.
+    fn bounded_extends_wildcards_map_in_params_and_stay_refused_in_returns() {
+        // Return position keeps refusing every wildcard, naming it as one.
         for t in ["List<? extends CharSequence>", "List<? extends Number>"] {
             let reason = java_to_ts(t).unwrap_err();
             assert!(reason.contains("wildcard"), "{t}: {reason}");
             assert!(!reason.contains("uses the class"), "{t}: {reason}");
         }
         assert_eq!(java_to_ts("List<String>").unwrap(), "string[]");
-        // `? super` writes, and an unbounded `?` is `Object`: both stay refusals that name why.
-        assert!(
-            java_to_ts("List<? super String>")
-                .unwrap_err()
-                .contains("? super String")
+        // `? super` writes, and an unbounded `?` is `Object`: both stay refusals in every position.
+        for f in [java_to_ts, java_to_ts_param] {
+            assert!(
+                f("List<? super String>")
+                    .unwrap_err()
+                    .contains("? super String")
+            );
+            assert!(f("List<?>").unwrap_err().contains("values of any type"));
+        }
+        // Parameter position unwraps `? extends T` to `T`, including nested containers.
+        assert_eq!(
+            java_to_ts_param("List<? extends CharSequence>").unwrap(),
+            "string[]"
+        );
+        assert_eq!(
+            java_to_ts_param("Map<String, ? extends Integer>").unwrap(),
+            "Record<string, int>"
+        );
+        assert_eq!(
+            java_to_ts_param("Map<? extends CharSequence, ? extends Double>").unwrap(),
+            "Record<string, number>"
+        );
+        assert_eq!(
+            java_to_ts_param("Optional<? extends String>").unwrap(),
+            "string | undefined"
+        );
+        assert_eq!(
+            java_to_ts_param("List<? extends List<? extends CharSequence>>").unwrap(),
+            "string[][]"
+        );
+        // Unbridged upper bounds report the bound's own reason, not "wildcard".
+        assert_eq!(
+            java_to_ts_param("List<? extends Number>").unwrap_err(),
+            "uses the class `Number`"
         );
         assert!(
-            java_to_ts("List<?>")
+            java_to_ts_param("List<? extends Object>")
                 .unwrap_err()
+                .contains("values of any type")
+        );
+    }
+
+    #[test]
+    fn exports_accept_extends_wildcards_in_parameters_only() {
+        let src = r#"package acme;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+public class Totals {
+    public static int count(List<? extends CharSequence> xs) { return xs.size(); }
+    public static int lookup(Map<String, ? extends Integer> m, Optional<? extends CharSequence> k) { return m.size(); }
+    public static double total(List<? extends Number> xs) { return 0.0; }
+    public static List<? extends CharSequence> echo(List<? extends CharSequence> xs) { return xs; }
+    public static void add(List<? super String> xs) {}
+    public static int anyLen(List<?> xs) { return xs.size(); }
+}
+"#;
+        let fns = exports("acme/Totals.java", src);
+        let by = |name: &str| fns.iter().find(|f| f.name == name).unwrap();
+
+        let count = by("count");
+        assert!(count.blocker.is_none(), "{count:?}");
+        assert_eq!(count.params[0].ts_type, "string[]");
+        assert_eq!(
+            count.params[0].native_type.as_deref(),
+            Some("List<? extends CharSequence>")
+        );
+
+        let lookup = by("lookup");
+        assert!(lookup.blocker.is_none(), "{lookup:?}");
+        assert_eq!(lookup.params[0].ts_type, "Record<string, int>");
+        assert_eq!(lookup.params[1].ts_type, "string | undefined");
+
+        let total = by("total");
+        assert_eq!(total.blocker.as_deref(), Some("uses the class `Number`"));
+
+        let echo = by("echo");
+        assert_eq!(
+            echo.blocker.as_deref(),
+            Some("uses a wildcard `? extends CharSequence`")
+        );
+
+        let add = by("add");
+        assert_eq!(
+            add.blocker.as_deref(),
+            Some("uses a wildcard `? super String`")
+        );
+
+        let any_len = by("anyLen");
+        assert!(
+            any_len
+                .blocker
+                .as_deref()
+                .unwrap_or("")
                 .contains("values of any type")
         );
     }

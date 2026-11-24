@@ -161,7 +161,7 @@ fn join(dir: &str, rest: &str) -> String {
 
 pub fn scan(source: &str) -> FileFacts {
     let mut facts = FileFacts {
-        loc: syntax::loc(source),
+        loc: syntax::loc(source, crate::lang::Lang::Kotlin),
         ..FileFacts::default()
     };
     let Some(tree) = syntax::parse(&language(), source) else {
@@ -332,14 +332,44 @@ fn split_top(text: &str) -> Vec<String> {
     out
 }
 
-/// A Kotlin type in the TS-like dialect, or why the bridge cannot carry it.
+fn strip_kw<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
+    let rest = s.strip_prefix(kw)?;
+    if rest.starts_with(char::is_whitespace) {
+        Some(rest.trim_start())
+    } else {
+        None
+    }
+}
+
+/// A Kotlin type in the TS-like dialect (return position), or why the bridge cannot carry it.
 pub fn kotlin_to_ts(t: &str) -> Result<String, String> {
+    kotlin_to_ts_inner(t, false)
+}
+
+/// A Kotlin parameter type in the TS-like dialect: covariant `out T` projections read as `T`.
+pub fn kotlin_to_ts_param(t: &str) -> Result<String, String> {
+    kotlin_to_ts_inner(t, true)
+}
+
+fn kotlin_to_ts_inner(t: &str, in_param: bool) -> Result<String, String> {
     let t = t.trim();
+    if t == "*" {
+        return Err("takes or returns `Any`: values of any type".into());
+    }
+    if let Some(bound) = strip_kw(t, "out") {
+        if in_param && !bound.is_empty() {
+            return kotlin_to_ts_inner(bound, true);
+        }
+        return Err(format!("uses a projection `{t}`"));
+    }
+    if strip_kw(t, "in").is_some() {
+        return Err(format!("uses a projection `{t}`"));
+    }
     if let Some(inner) = t.strip_suffix('?') {
-        return kotlin_to_ts(inner).map(|i| format!("{i} | undefined"));
+        return kotlin_to_ts_inner(inner, in_param).map(|i| format!("{i} | undefined"));
     }
     if let Some(inner) = t.strip_suffix("[]") {
-        return kotlin_to_ts(inner).map(|i| format!("{i}[]"));
+        return kotlin_to_ts_inner(inner, in_param).map(|i| format!("{i}[]"));
     }
     let (head, args) = match t.find('<') {
         Some(i) if t.ends_with('>') => (&t[..i], split_top(&t[i + 1..t.len() - 1])),
@@ -347,8 +377,10 @@ pub fn kotlin_to_ts(t: &str) -> Result<String, String> {
     };
     let head = head.trim().rsplit('.').next().unwrap_or(head);
     let arg = |i: usize| -> Result<String, String> {
-        args.get(i)
-            .map_or_else(|| Err(format!("raw `{head}`")), |a| kotlin_to_ts(a))
+        args.get(i).map_or_else(
+            || Err(format!("raw `{head}`")),
+            |a| kotlin_to_ts_inner(a, in_param),
+        )
     };
     Ok(match head {
         "String" | "CharSequence" => "string".into(),
@@ -408,6 +440,14 @@ pub fn kotlin_to_ts(t: &str) -> Result<String, String> {
 /// A Kotlin type as a Java type the generated wrappers can declare and reflection can read.
 /// `None` when the type has no Java counterpart in the bridged subset.
 fn kotlin_to_java(t: &str) -> Option<String> {
+    kotlin_to_java_inner(t, false)
+}
+
+fn kotlin_to_java_param(t: &str) -> Option<String> {
+    kotlin_to_java_inner(t, true)
+}
+
+fn kotlin_to_java_inner(t: &str, in_param: bool) -> Option<String> {
     let t = t.trim();
     let boxed = |s: String| match s.as_str() {
         "int" => "Integer".into(),
@@ -420,21 +460,34 @@ fn kotlin_to_java(t: &str) -> Option<String> {
         "char" => "Character".into(),
         _ => s,
     };
+    if t == "*" || strip_kw(t, "in").is_some() {
+        return None;
+    }
+    if let Some(bound) = strip_kw(t, "out") {
+        if !in_param || bound.is_empty() {
+            return None;
+        }
+        return kotlin_to_java_inner(bound, true).map(|j| format!("? extends {}", boxed(j)));
+    }
     if let Some(inner) = t.strip_suffix('?') {
-        return kotlin_to_java(inner).map(boxed);
+        return kotlin_to_java_inner(inner, in_param).map(boxed);
     }
     if let Some(inner) = t.strip_suffix("[]") {
-        return kotlin_to_java(inner).map(|i| format!("{}[]", boxed(i)));
+        return kotlin_to_java_inner(inner, in_param).map(|i| format!("{}[]", boxed(i)));
     }
     let (head, args) = match t.find('<') {
         Some(i) if t.ends_with('>') => (&t[..i], split_top(&t[i + 1..t.len() - 1])),
         _ => (t, Vec::new()),
     };
     let head = head.trim().rsplit('.').next().unwrap_or(head);
-    let arg =
-        |i: usize| -> Option<String> { args.get(i).and_then(|a| kotlin_to_java(a)).map(boxed) };
+    let arg = |i: usize| -> Option<String> {
+        args.get(i)
+            .and_then(|a| kotlin_to_java_inner(a, in_param))
+            .map(boxed)
+    };
     Some(match head {
-        "String" | "CharSequence" => "String".into(),
+        "String" => "String".into(),
+        "CharSequence" => "CharSequence".into(),
         "Int" => "int".into(),
         "Long" => "long".into(),
         "Short" => "short".into(),
@@ -445,9 +498,18 @@ fn kotlin_to_java(t: &str) -> Option<String> {
         "Unit" | "Nothing" => "void".into(),
         "List" | "MutableList" | "Collection" | "Iterable" => format!("List<{}>", arg(0)?),
         "Map" | "MutableMap" | "LinkedHashMap" => {
-            format!("Map<String, {}>", arg(1)?)
+            format!("Map<{}, {}>", arg(0)?, arg(1)?)
         }
-        "Array" => format!("{}[]", arg(0)?),
+        "Array" => {
+            // Java arrays are covariant (`String[]`, not `(? extends String)[]`).
+            let raw = args.first()?;
+            let elem = if in_param {
+                strip_kw(raw.trim(), "out").unwrap_or(raw)
+            } else {
+                raw
+            };
+            format!("{}[]", boxed(kotlin_to_java_inner(elem, in_param)?))
+        }
         "IntArray" => "int[]".into(),
         "LongArray" => "long[]".into(),
         "ShortArray" => "short[]".into(),
@@ -501,7 +563,27 @@ fn modifier_words(mods: &str) -> impl Iterator<Item = &str> {
 }
 
 fn type_text(node: Node<'_>, source: &str) -> String {
-    text(node, source).replace(' ', "")
+    // Collapse whitespace runs while keeping spaces between words (`out T`, `in T`, `->`),
+    // dropping spaces next to punctuation (`<`, `>`, `,`, `.`, `?`, `[`, `]`, `(`, `)`).
+    let mut out = String::new();
+    let mut pending_space = false;
+    for ch in text(node, source).chars() {
+        if ch.is_whitespace() {
+            pending_space = !out.is_empty();
+            continue;
+        }
+        if pending_space {
+            let prev = out.chars().last().unwrap_or(' ');
+            if !matches!(prev, '<' | ',' | '.' | '(' | '[' | '?')
+                && !matches!(ch, '<' | '>' | ',' | '.' | ')' | ']' | '?' | '[')
+            {
+                out.push(' ');
+            }
+            pending_space = false;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Type nodes in the Kotlin grammar: a bare `type`, plus the named variants the grammar
@@ -615,11 +697,11 @@ fn collect(
                     .iter()
                     .find(|n| is_type_node(n.kind()))
                     .map_or_else(|| "Any".to_string(), |n| type_text(*n, source));
-                let ts_type = kotlin_to_ts(&ptype).unwrap_or_else(|reason| {
+                let ts_type = kotlin_to_ts_param(&ptype).unwrap_or_else(|reason| {
                     blocker.get_or_insert(reason);
                     "unknown".into()
                 });
-                let java_type = kotlin_to_java(&ptype).unwrap_or_else(|| {
+                let java_type = kotlin_to_java_param(&ptype).unwrap_or_else(|| {
                     blocker.get_or_insert_with(|| {
                         format!("`{ptype}` has no Java counterpart for the wrapper")
                     });
@@ -943,6 +1025,129 @@ mod tests {
             fns.iter()
                 .any(|f| f.blocker.as_deref().unwrap_or("").contains("JvmName")),
             "{fns:?}"
+        );
+    }
+
+    #[test]
+    fn out_projections_map_in_params_and_in_or_return_projections_stay_refused() {
+        // Return position refuses `out T`, `in T`, and `*`.
+        assert!(
+            kotlin_to_ts("List<out CharSequence>")
+                .unwrap_err()
+                .contains("out CharSequence")
+        );
+        assert!(
+            kotlin_to_ts("List<in String>")
+                .unwrap_err()
+                .contains("in String")
+        );
+        assert!(
+            kotlin_to_ts("List<*>")
+                .unwrap_err()
+                .contains("values of any type")
+        );
+        assert!(kotlin_to_java("List<out CharSequence>").is_none());
+        assert!(kotlin_to_java("List<in String>").is_none());
+        assert!(kotlin_to_java("List<*>").is_none());
+
+        // Parameter position unwraps `out T` to `T` and maps to Java `? extends T` (or `T[]` for arrays).
+        assert_eq!(
+            kotlin_to_ts_param("List<out CharSequence>").unwrap(),
+            "string[]"
+        );
+        assert_eq!(
+            kotlin_to_java_param("List<out CharSequence>").unwrap(),
+            "List<? extends CharSequence>"
+        );
+        assert_eq!(
+            kotlin_to_ts_param("Map<String, out Int>").unwrap(),
+            "Record<string, int>"
+        );
+        assert_eq!(
+            kotlin_to_java_param("Map<String, out Int>").unwrap(),
+            "Map<String, ? extends Integer>"
+        );
+        assert_eq!(
+            kotlin_to_ts_param("Array<out CharSequence>").unwrap(),
+            "string[]"
+        );
+        assert_eq!(
+            kotlin_to_java_param("Array<out CharSequence>").unwrap(),
+            "CharSequence[]"
+        );
+        assert_eq!(
+            kotlin_to_ts_param("List<out String?>").unwrap(),
+            "(string | undefined)[]"
+        );
+        assert_eq!(
+            kotlin_to_java_param("List<out String?>").unwrap(),
+            "List<? extends String>"
+        );
+        assert_eq!(
+            kotlin_to_ts_param("List<out Number>").unwrap_err(),
+            "uses the class `Number`"
+        );
+        assert!(
+            kotlin_to_ts_param("List<in String>")
+                .unwrap_err()
+                .contains("in String")
+        );
+        assert!(
+            kotlin_to_ts_param("List<*>")
+                .unwrap_err()
+                .contains("values of any type")
+        );
+    }
+
+    #[test]
+    fn exports_accept_out_projections_in_parameters_only() {
+        let src = r#"package acme
+
+fun count(xs: List<out CharSequence>): Int = xs.size
+fun arrLen(xs: Array<out String>): Int = xs.size
+fun total(xs: List<out Number>): Double = 0.0
+fun echo(xs: List<out CharSequence>): List<out CharSequence> = xs
+fun add(xs: MutableList<in String>) {}
+fun anyLen(xs: List<*>): Int = xs.size
+"#;
+        let fns = exports("src/main/kotlin/acme/Totals.kt", src);
+        let by = |name: &str| fns.iter().find(|f| f.name == name).unwrap();
+
+        let count = by("count");
+        assert!(count.blocker.is_none(), "{count:?}");
+        assert_eq!(count.params[0].ts_type, "string[]");
+        assert_eq!(
+            count.params[0].native_type.as_deref(),
+            Some("List<? extends CharSequence>")
+        );
+
+        let arr_len = by("arrLen");
+        assert!(arr_len.blocker.is_none(), "{arr_len:?}");
+        assert_eq!(arr_len.params[0].ts_type, "string[]");
+        assert_eq!(arr_len.params[0].native_type.as_deref(), Some("String[]"));
+
+        let total = by("total");
+        assert_eq!(total.blocker.as_deref(), Some("uses the class `Number`"));
+
+        let echo = by("echo");
+        assert_eq!(
+            echo.blocker.as_deref(),
+            Some("uses a projection `out CharSequence`")
+        );
+
+        let add = by("add");
+        assert_eq!(
+            add.blocker.as_deref(),
+            Some("uses a projection `in String`")
+        );
+
+        let any_len = by("anyLen");
+        assert!(
+            any_len
+                .blocker
+                .as_deref()
+                .unwrap_or("")
+                .contains("values of any type")
         );
     }
 }

@@ -15,6 +15,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.WildcardType;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -165,7 +166,7 @@ public final class RustAnythingJson {
     private static void write(StringBuilder out, Object v) {
         if (v == null) {
             out.append("null");
-        } else if (v instanceof String || v instanceof Character) {
+        } else if (v instanceof CharSequence || v instanceof Character) {
             quote(out, v.toString());
         } else if (v instanceof Double || v instanceof Float) {
             double d = ((Number) v).doubleValue();
@@ -273,6 +274,14 @@ public final class RustAnythingJson {
 
     /** Converts a parsed JSON value to {@code type}. */
     public static Object convert(Object v, Type type) {
+        if (type instanceof WildcardType) {
+            WildcardType w = (WildcardType) type;
+            if (w.getLowerBounds().length > 0) {
+                throw new Mismatch("unsupported wildcard " + type);
+            }
+            Type[] upper = w.getUpperBounds();
+            return convert(v, upper.length > 0 ? upper[0] : Object.class);
+        }
         if (type instanceof ParameterizedType) {
             ParameterizedType p = (ParameterizedType) type;
             Class<?> raw = (Class<?>) p.getRawType();
@@ -354,12 +363,34 @@ public final class RustAnythingJson {
         throw new Mismatch("unsupported type " + c);
     }
 
+    private static Class<?> rawType(Type type) {
+        if (type instanceof WildcardType) {
+            WildcardType w = (WildcardType) type;
+            if (w.getLowerBounds().length > 0) {
+                throw new Mismatch("unsupported wildcard " + type);
+            }
+            Type[] upper = w.getUpperBounds();
+            return rawType(upper.length > 0 ? upper[0] : Object.class);
+        }
+        if (type instanceof Class) {
+            return (Class<?>) type;
+        }
+        if (type instanceof ParameterizedType) {
+            return (Class<?>) ((ParameterizedType) type).getRawType();
+        }
+        if (type instanceof GenericArrayType) {
+            Class<?> elem = rawType(((GenericArrayType) type).getGenericComponentType());
+            return Array.newInstance(elem, 0).getClass();
+        }
+        throw new Mismatch("unsupported type " + type);
+    }
+
     private static Object array(Object v, Type component) {
         if (!(v instanceof List)) {
             throw new Mismatch("not an array");
         }
         List<?> list = (List<?>) v;
-        Class<?> raw = component instanceof Class ? (Class<?>) component : (Class<?>) ((ParameterizedType) component).getRawType();
+        Class<?> raw = rawType(component);
         Object out = Array.newInstance(raw, list.size());
         for (int i = 0; i < list.size(); i++) {
             Array.set(out, i, convert(list.get(i), component));
@@ -423,27 +454,7 @@ public final class {class} {{
         String message = parsed.containsKey("error")
             ? String.valueOf(parsed.get("error"))
             : "Rust panic: " + parsed.get("panic");
-        throw exception(message);
-    }}
-
-    /** {{@code "IllegalArgumentException: msg"}} becomes that exception; anything else a RuntimeException. */
-    private static RuntimeException exception(String message) {{
-        int colon = message.indexOf(": ");
-        if (colon > 0) {{
-            String type = message.substring(0, colon);
-            String rest = message.substring(colon + 2);
-            for (String prefix : new String[] {{"", "java.lang.", "java.util.", "java.io.", "java.time."}}) {{
-                try {{
-                    Class<?> c = Class.forName(prefix + type);
-                    if (RuntimeException.class.isAssignableFrom(c)) {{
-                        return (RuntimeException) c.getConstructor(String.class).newInstance(rest);
-                    }}
-                }} catch (ReflectiveOperationException e) {{
-                    // try the next package
-                }}
-            }}
-        }}
-        return new RuntimeException(message);
+        throw RustAnythingError.from(message);
     }}
 }}
 "#,
@@ -1302,9 +1313,33 @@ fn split_generic(t: &str) -> Option<(&str, Vec<String>)> {
     Some((t[..i].trim(), args))
 }
 
-/// The wire type of a Java type; `None` for types the wire does not carry.
+/// The wire type of a Java type (return position); `None` for types the wire does not carry.
 fn java_ty(t: &str) -> Option<Ty> {
+    java_ty_inner(t, false)
+}
+
+/// The wire type of a Java parameter type: covariant `? extends T` wildcards unwrap to `T`.
+fn java_ty_param(t: &str) -> Option<Ty> {
+    java_ty_inner(t, true)
+}
+
+fn java_ty_inner(t: &str, in_param: bool) -> Option<Ty> {
     let t = t.trim();
+    if let Some(rest) = t.strip_prefix('?') {
+        if !in_param {
+            return None;
+        }
+        let rest = rest.trim();
+        let after = rest.strip_prefix("extends")?;
+        if !after.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let bound = after.trim();
+        if bound.is_empty() || bound.contains('&') {
+            return None;
+        }
+        return java_ty_inner(bound, true);
+    }
     let boxed = |inner: Ty| Ty::Opt {
         inner: Box::new(inner),
         native: t.to_string(),
@@ -1313,7 +1348,10 @@ fn java_ty(t: &str) -> Option<Ty> {
         "int" | "long" | "short" | "byte" => Ty::I64(t.into()),
         "double" | "float" => Ty::F64(t.into()),
         "boolean" => Ty::Bool,
-        "String" | "CharSequence" => Ty::Str,
+        "String" => Ty::Str,
+        // `Reader` decodes `String` (`List<String>`, `Map<String, T>`), which is not assignable
+        // to invariant `List<CharSequence>` / `Map<CharSequence, T>` in return position.
+        "CharSequence" if in_param => Ty::Str,
         "Integer" => boxed(Ty::I64("int".into())),
         "Long" => boxed(Ty::I64("long".into())),
         "Short" => boxed(Ty::I64("short".into())),
@@ -1323,7 +1361,7 @@ fn java_ty(t: &str) -> Option<Ty> {
         "Boolean" => boxed(Ty::Bool),
         _ => {
             if let Some(item) = t.strip_suffix("[]") {
-                let item_ty = java_ty(item)?;
+                let item_ty = java_ty_inner(item, in_param)?;
                 // Primitive arrays need a helper; reference arrays use a generic one.
                 if matches!(item_ty, Ty::I64(_) | Ty::F64(_) | Ty::Bool)
                     && !matches!(item.trim(), "int" | "long" | "double" | "boolean")
@@ -1339,18 +1377,20 @@ fn java_ty(t: &str) -> Option<Ty> {
             let (head, args) = split_generic(t)?;
             match head.rsplit('.').next().unwrap_or(head) {
                 "List" | "ArrayList" | "Collection" | "Iterable" | "LinkedList" => Ty::List {
-                    item: Box::new(java_ty(args.first()?)?),
+                    item: Box::new(java_ty_inner(args.first()?, in_param)?),
                     native: t.into(),
                     array: false,
                 },
-                "Map" | "LinkedHashMap" | "HashMap" | "TreeMap" if args.first()? == "String" => {
+                "Map" | "LinkedHashMap" | "HashMap" | "TreeMap"
+                    if java_ty_inner(args.first()?, in_param) == Some(Ty::Str) =>
+                {
                     Ty::Map {
-                        value: Box::new(java_ty(args.get(1)?)?),
+                        value: Box::new(java_ty_inner(args.get(1)?, in_param)?),
                         native: t.into(),
                     }
                 }
                 "Optional" => Ty::Opt {
-                    inner: Box::new(java_ty(args.first()?)?),
+                    inner: Box::new(java_ty_inner(args.first()?, in_param)?),
                     native: t.into(),
                 },
                 _ => return None,
@@ -1439,6 +1479,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Generated by rust-anything: a port's error, thrown from Rust without a stack trace (cheap from native code). */
 public final class RustAnythingError extends RuntimeException {
     private static final long serialVersionUID = 1L;
+    private static final String[] PREFIXES = {
+        "", "java.lang.", "java.util.", "java.io.", "java.time.", "java.util.concurrent."
+    };
     private static final ConcurrentHashMap<String, Optional<Constructor<? extends RuntimeException>>> CONSTRUCTORS = new ConcurrentHashMap<>();
 
     public final String type;
@@ -1451,7 +1494,7 @@ public final class RustAnythingError extends RuntimeException {
     // Plain reflection, not MethodHandle: Android only supports MethodHandle.invokeExact from
     // API 26, and these libraries run on older phones too.
     private static Optional<Constructor<? extends RuntimeException>> constructor(String type) {
-        for (String prefix : new String[] {"java.lang.", "java.util.", "java.io.", ""}) {
+        for (String prefix : PREFIXES) {
             try {
                 Class<?> c = Class.forName(prefix + type);
                 if (RuntimeException.class.isAssignableFrom(c)) {
@@ -1460,11 +1503,42 @@ public final class RustAnythingError extends RuntimeException {
                         (Constructor<? extends RuntimeException>) c.getConstructor(String.class);
                     return Optional.of(ctor);
                 }
-            } catch (ReflectiveOperationException | IllegalArgumentException e) {
+            } catch (ReflectiveOperationException | IllegalArgumentException | LinkageError e) {
                 // try the next package
             }
         }
         return Optional.empty();
+    }
+
+    /** Turns {@code "Type: message"} into that RuntimeException; anything else a RuntimeException. */
+    public static RuntimeException from(String message) {
+        if (message != null) {
+            int colon = message.indexOf(": ");
+            if (colon > 0 && isTypeName(message, colon)) {
+                return make(message.substring(0, colon), message.substring(colon + 2));
+            }
+        }
+        return new RuntimeException(message);
+    }
+
+    private static boolean isTypeName(String s, int end) {
+        char first = s.charAt(0);
+        if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z'))) {
+            return false;
+        }
+        for (int i = 1; i < end; i++) {
+            char c = s.charAt(i);
+            boolean ok = (c >= 'A' && c <= 'Z')
+                || (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '.'
+                || c == '_'
+                || c == '$';
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** The exception the original throws: `type` with the message, else a RuntimeException. */
@@ -1557,12 +1631,12 @@ public final class RustAnythingWire {
             tag(v ? 1 : 0);
         }
 
-        public void str(String s) {
+        public void str(CharSequence s) {
             if (s == null) {
                 tag(0);
                 return;
             }
-            byte[] b = s.getBytes(StandardCharsets.UTF_8);
+            byte[] b = s.toString().getBytes(StandardCharsets.UTF_8);
             tag(1);
             len(b.length);
             ensure(b.length);
@@ -1718,7 +1792,7 @@ fn java_wire_fns<'m>(
         let Some(params) = e
             .params
             .iter()
-            .map(|p| Some((p.name.clone(), java_ty(p.native_type.as_deref()?)?)))
+            .map(|p| Some((p.name.clone(), java_ty_param(p.native_type.as_deref()?)?)))
             .collect::<Option<Vec<_>>>()
         else {
             continue;
@@ -1885,5 +1959,90 @@ mod tests {
         assert_eq!(mangle_jni_component("n_café"), "n_1caf_000e9");
         assert_eq!(mangle_jni_component("w_get$Value"), "w_1get_00024Value");
         assert_eq!(mangle_jni_component("n_𐐀"), "n_1_0d801_0dc00");
+    }
+
+    #[test]
+    fn wildcard_params_cross_wire_and_json_converter() {
+        assert!(java_ty("List<? extends CharSequence>").is_none());
+        assert!(java_ty("Map<CharSequence, Integer>").is_none());
+        assert!(java_ty("List<CharSequence>").is_none());
+        assert!(java_ty_param("List<? extends CharSequence>").is_some());
+        assert!(java_ty_param("Map<CharSequence, Integer>").is_some());
+        assert!(java_ty_param("Map<String, ? extends Integer>").is_some());
+        assert!(java_ty_param("Map<? extends CharSequence, ? extends Integer>").is_some());
+        assert!(java_ty_param("Optional<? extends CharSequence>").is_some());
+        assert!(java_ty_param("List<? super String>").is_none());
+        assert!(java_ty_param("List<?>").is_none());
+
+        assert!(JSON_JAVA.contains("import java.lang.reflect.WildcardType;"));
+        assert!(JSON_JAVA.contains("type instanceof WildcardType"));
+        assert!(JSON_JAVA.contains("type instanceof GenericArrayType"));
+        assert!(JSON_JAVA.contains("v instanceof CharSequence"));
+        assert!(WIRE_JAVA.contains("public void str(CharSequence s)"));
+
+        let src = r#"package acme;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+public class Wildcards {
+    public static int count(List<? extends CharSequence> xs) { return xs.size(); }
+    public static int sumMap(Map<String, ? extends Integer> m) { return m.size(); }
+    public static int optLen(Optional<? extends CharSequence> s) { return s.map(CharSequence::length).orElse(0); }
+}
+"#;
+        let exports = crate::lang::java::exports("acme/Wildcards.java", src);
+        let manifest = Manifest {
+            schema: String::new(),
+            root: std::path::PathBuf::new(),
+            root_written: None,
+            unit: "acme/Wildcards.java".into(),
+            language: crate::lang::Lang::Java,
+            kind: crate::bridge::Kind::Ffi,
+            crate_name: "wildcards-rs".into(),
+            exports,
+            classes: vec![],
+            js_only: vec![],
+            batches: vec![],
+            allocator: Default::default(),
+            float_tolerance: None,
+            ignore_key_order: false,
+        };
+        let mut api = crate::codegen::parse_port(&crate::codegen::port_rs(&manifest));
+        crate::bridge::match_export_names(&manifest, &mut api);
+        let native = native_class(&manifest, &api);
+        assert!(
+            native.contains("public static int call_count(List<? extends CharSequence> xs)"),
+            "{native}"
+        );
+        assert!(native.contains("w.str(v0);"), "{native}");
+        assert!(
+            native.contains("public static int call_optLen(Optional<? extends CharSequence> s)"),
+            "{native}"
+        );
+    }
+
+    #[test]
+    fn native_class_shares_error_lookup_with_rust_anything_error() {
+        let m = Manifest {
+            schema: String::new(),
+            root: std::path::PathBuf::new(),
+            root_written: None,
+            unit: "Dates.java".into(),
+            language: crate::lang::Lang::Java,
+            kind: crate::bridge::Kind::Ffi,
+            crate_name: "time-rs".into(),
+            exports: Vec::new(),
+            classes: Vec::new(),
+            js_only: Vec::new(),
+            batches: Vec::new(),
+            allocator: Default::default(),
+            float_tolerance: None,
+            ignore_key_order: false,
+        };
+        let native = native_class(&m, &crate::codegen::PortApi::default());
+        assert!(native.contains("throw RustAnythingError.from(message);"));
+        assert!(!native.contains("private static RuntimeException exception("));
+        assert!(ERROR_JAVA.contains("\"java.time.\""));
+        assert!(ERROR_JAVA.contains("\"java.util.concurrent.\""));
     }
 }
