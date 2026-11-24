@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Java and Kotlin ports turn `Err("Type: message")` into the same exception on the JSON, typed, wire
+  and batch paths, and look in `java.time` and `java.util.concurrent` too, so a typed call no
+  longer throws `RuntimeException` for `DateTimeException` (#359).
 - `report` says "Nx slower" for a port slower than the original in the card's `aria-label` and in
   REPORT.md's speedup rows, instead of "0.0x faster" and `0.0x` (#433).
 - `analyze` and `map` count lines of code the way `gate`'s size check does, leaving out comment

@@ -88,7 +88,9 @@ public class CheckErrors {
         "RustAnythingError.java",
         "CheckErrors.java",
     ]))?;
-    run(Command::new("java").current_dir(root).args(["-cp", ".", "CheckErrors"]))?;
+    run(Command::new("java")
+        .current_dir(root)
+        .args(["-cp", ".", "CheckErrors"]))?;
     Ok(())
 }
 
