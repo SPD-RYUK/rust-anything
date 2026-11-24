@@ -32,21 +32,37 @@ fn run(cmd: &mut Command, what: &str) -> Result<()> {
 }
 
 fn files(crate_dir: &Path, m: &Manifest, rust: bool) -> Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = if rust {
+        let ported: std::collections::HashSet<&str> = m
+            .exports
+            .iter()
+            .map(|f| f.file.as_str())
+            .chain(m.js_only.iter().map(|j| j.file.as_str()))
+            .collect();
+        crate::lang::php::discover(&m.root)?
+            .files
+            .into_iter()
+            .filter(|f| {
+                f.kind == crate::ts::discover::FileKind::Source && !ported.contains(f.path.as_str())
+            })
+            .map(|f| m.root.join(f.path))
+            .collect()
+    } else {
+        m.exports
+            .iter()
+            .map(|f| m.root.join(&f.file))
+            .chain(m.js_only.iter().map(|j| m.root.join(&j.file)))
+            .collect()
+    };
+    files.sort();
+    files.dedup();
     if rust {
-        return Ok(vec![
+        files.push(
             crate_dir
                 .join(crate::codegen_php::wrapper_path(m))
                 .canonical()?,
-        ]);
+        );
     }
-    let mut files: Vec<PathBuf> = m
-        .exports
-        .iter()
-        .map(|f| m.root.join(&f.file))
-        .chain(m.js_only.iter().map(|j| m.root.join(&j.file)))
-        .collect();
-    files.sort();
-    files.dedup();
     Ok(files)
 }
 
