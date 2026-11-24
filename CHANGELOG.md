@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `bridge --batch` on a C unit, and `refresh --batch` on a C, PHP, C# or PowerShell crate, fail with
+  "`--batch` is not available for <language> units yet" instead of saving a batch that generates
+  nothing (#434).
 - Java and Kotlin ports turn `Err("Type: message")` into the same exception on the JSON, typed, wire
   and batch paths, and look in `java.time` and `java.util.concurrent` too, so a typed call no
   longer throws `RuntimeException` for `DateTimeException` (#359).

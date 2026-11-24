@@ -777,8 +777,8 @@ fn parse_batches(specs: &[String]) -> Result<Vec<crate::codegen_batch::Batch>> {
         .collect()
 }
 
-/// Fails when `lang` or `kind` has no batch generator yet, so `bridge`, `add_batches`, and
-/// `refresh` refuse `--batch` in one place with the same message.
+/// Fails when `lang` or `kind` has no batch generator yet, so `bridge` and `refresh --batch`
+/// refuse `--batch` in one place with the same message.
 fn ensure_batch_support(lang: crate::lang::Lang, kind: Kind) -> Result<()> {
     use crate::lang::Lang;
     let unsupported = match lang {
@@ -966,9 +966,6 @@ pub struct Refreshed {
 /// `port.rs`, and adds the dependencies they need to Cargo.toml. Never touches `port.rs`.
 pub fn refresh(crate_dir: &Path) -> Result<Refreshed> {
     let manifest = Manifest::load(crate_dir)?;
-    if !manifest.batches.is_empty() {
-        ensure_batch_support(manifest.language, manifest.kind)?;
-    }
     if manifest.kind == Kind::CAbi {
         let port = std::fs::read_to_string(crate_dir.join("src/port.rs"))
             .context("reading src/port.rs")?;
