@@ -915,7 +915,7 @@ fn c_units_bridge_record_and_diff() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c");
     let dir = std::env::temp_dir().join(format!("rust-anything-c-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let outcome = bridge::bridge(&bridge::Options {
+    let options = |batch: Vec<String>| bridge::Options {
         root: &root,
         unit: "src/text.c",
         kind: None,
@@ -924,12 +924,26 @@ fn c_units_bridge_record_and_diff() {
         force: false,
         keep: Vec::new(),
         lang: None,
-        batch: Vec::new(),
+        batch,
         as_json: Vec::new(),
         allocator: Default::default(),
-    })
-    .unwrap();
+    };
+    let batch = bridge::bridge(&options(vec!["count_words:s".into()]))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(batch, "`--batch` is not available for C units yet");
+    assert!(!dir.exists());
+    let outcome = bridge::bridge(&options(Vec::new())).unwrap();
     assert_eq!(outcome.kind, Kind::CAbi);
+    let before = std::fs::read_to_string(dir.join("rust-anything.json")).unwrap();
+    let refresh_batch = bridge::add_batches(&dir, &["count_words:s".into()])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(refresh_batch, "`--batch` is not available for C units yet");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("rust-anything.json")).unwrap(),
+        before
+    );
     let manifest = Manifest::load(&dir).unwrap();
     // A returned pointer needs an ownership design: it stays in C.
     let kept: Vec<&str> = manifest.js_only.iter().map(|j| j.name.as_str()).collect();
@@ -1566,7 +1580,7 @@ fn php_functions_bridge_record_and_diff() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/php-functions");
     let dir = std::env::temp_dir().join(format!("rust-anything-php-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let outcome = bridge::bridge(&bridge::Options {
+    let options = |batch: Vec<String>| bridge::Options {
         root: &root,
         unit: "src/",
         kind: None,
@@ -1575,12 +1589,28 @@ fn php_functions_bridge_record_and_diff() {
         force: false,
         keep: Vec::new(),
         lang: None,
-        batch: Vec::new(),
+        batch,
         as_json: Vec::new(),
         allocator: Default::default(),
-    })
-    .unwrap();
+    };
+    let batch = bridge::bridge(&options(vec!["slugify:text".into()]))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(batch, "`--batch` is not available for PHP units yet");
+    let outcome = bridge::bridge(&options(Vec::new())).unwrap();
     assert_eq!(outcome.kind, Kind::Ffi);
+    let before = std::fs::read_to_string(dir.join("rust-anything.json")).unwrap();
+    let refresh_batch = bridge::add_batches(&dir, &["slugify:text".into()])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        refresh_batch,
+        "`--batch` is not available for PHP units yet"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("rust-anything.json")).unwrap(),
+        before
+    );
     let manifest = Manifest::load(&dir).unwrap();
     let kept: Vec<(&str, &str)> = manifest
         .js_only
@@ -1765,6 +1795,15 @@ fn csharp_static_methods_bridge_record_and_diff() {
     );
     let outcome = bridge::bridge(&options(Vec::new())).unwrap();
     assert_eq!(outcome.kind, Kind::Ffi);
+    let before = std::fs::read_to_string(dir.join("rust-anything.json")).unwrap();
+    let refresh_batch = bridge::add_batches(&dir, &["Mean:xs".into()])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(refresh_batch, "`--batch` is not available for C# units yet");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("rust-anything.json")).unwrap(),
+        before
+    );
     let manifest = Manifest::load(&dir).unwrap();
     let kept: Vec<(&str, &str)> = manifest
         .js_only

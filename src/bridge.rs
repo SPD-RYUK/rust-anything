@@ -777,11 +777,29 @@ fn parse_batches(specs: &[String]) -> Result<Vec<crate::codegen_batch::Batch>> {
         .collect()
 }
 
+/// Fails when `lang` or `kind` has no batch generator yet, so `bridge`, `add_batches`, and
+/// `refresh` refuse `--batch` in one place with the same message.
+fn ensure_batch_support(lang: crate::lang::Lang, kind: Kind) -> Result<()> {
+    use crate::lang::Lang;
+    let unsupported = match lang {
+        Lang::C | Lang::Php | Lang::Csharp | Lang::Powershell => Some(lang.name()),
+        _ if kind == Kind::CAbi => Some(Lang::C.name()),
+        _ => None,
+    };
+    if let Some(name) = unsupported {
+        bail!("`--batch` is not available for {name} units yet");
+    }
+    Ok(())
+}
+
 /// Adds batch classes to a bridged crate, then regenerates its bindings.
 pub fn add_batches(crate_dir: &Path, specs: &[String]) -> Result<Refreshed> {
     let path = crate_dir.join(MANIFEST);
     let before = std::fs::read_to_string(&path).with_context(|| format!("{}", path.display()))?;
     let mut manifest = Manifest::load(crate_dir)?;
+    if !specs.is_empty() {
+        ensure_batch_support(manifest.language, manifest.kind)?;
+    }
     for b in parse_batches(specs)? {
         if !manifest.batches.contains(&b) {
             manifest.batches.push(b);
@@ -948,6 +966,9 @@ pub struct Refreshed {
 /// `port.rs`, and adds the dependencies they need to Cargo.toml. Never touches `port.rs`.
 pub fn refresh(crate_dir: &Path) -> Result<Refreshed> {
     let manifest = Manifest::load(crate_dir)?;
+    if !manifest.batches.is_empty() {
+        ensure_batch_support(manifest.language, manifest.kind)?;
+    }
     if manifest.kind == Kind::CAbi {
         let port = std::fs::read_to_string(crate_dir.join("src/port.rs"))
             .context("reading src/port.rs")?;
@@ -1093,15 +1114,6 @@ pub fn bridge(opts: &Options) -> Result<Outcome> {
             unit.notes.first().map_or("", String::as_str)
         );
     }
-    if unit.bridge == Bridge::PhpFfi && !opts.batch.is_empty() {
-        bail!("`--batch` is not available for PHP units yet");
-    }
-    if unit.bridge == Bridge::DotnetFfi && !opts.batch.is_empty() {
-        bail!("`--batch` is not available for C# units yet");
-    }
-    if unit.bridge == Bridge::PwshFfi && !opts.batch.is_empty() {
-        bail!("`--batch` is not available for PowerShell units yet");
-    }
     let kind = opts.kind.unwrap_or(match unit.bridge {
         Bridge::WasmBindgen => Kind::Wasm,
         Bridge::Pyo3 => Kind::Pyo3,
@@ -1114,6 +1126,9 @@ pub fn bridge(opts: &Options) -> Result<Outcome> {
         | Bridge::PwshFfi => Kind::Ffi,
         _ => Kind::Napi,
     });
+    if !opts.batch.is_empty() {
+        ensure_batch_support(lang, kind)?;
+    }
 
     let mut exports = Vec::new();
     let mut classes = Vec::new();

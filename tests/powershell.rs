@@ -200,6 +200,18 @@ fn a_module_is_bridged_with_its_parameter_blocks() {
     assert!(batch.contains("not available for PowerShell"), "{batch}");
     let outcome = bridge::bridge(&options(&fixture(), &dir, Vec::new())).unwrap();
     assert_eq!(outcome.kind, Kind::Ffi);
+    let before = std::fs::read_to_string(dir.join("rust-anything.json")).unwrap();
+    let refresh_batch = bridge::add_batches(&dir, &["Measure-Mean:Values".into()])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        refresh_batch,
+        "`--batch` is not available for PowerShell units yet"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("rust-anything.json")).unwrap(),
+        before
+    );
     let manifest = Manifest::load(&dir).unwrap();
     let kept: Vec<(&str, &str)> = manifest
         .js_only
