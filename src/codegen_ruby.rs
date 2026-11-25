@@ -86,7 +86,7 @@ fn module_functions(m: &Manifest, lib: &str) -> String {
         let sig = signature(f);
         let args: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
         let def = format!(
-            "def self.{name}({sig})\n  RustAnythingNative{}.{}({})\nend",
+            "def {name}({sig})\n  RustAnythingNative{}.{}({})\nend",
             camel(lib),
             f.name,
             args.join(", ")
@@ -97,26 +97,32 @@ fn module_functions(m: &Manifest, lib: &str) -> String {
         }
     }
     for (recv, defs) in by_module {
-        let parts: Vec<&str> = recv.split("::").collect();
-        let mut code = String::new();
-        for (depth, part) in parts.iter().enumerate() {
-            let _ = writeln!(code, "{}module {part}", "  ".repeat(depth));
-        }
-        let indent = "  ".repeat(parts.len());
+        let mut code = reopen(&recv);
+        let _ = writeln!(code, "class << {recv}");
         for (i, def) in defs.iter().enumerate() {
             if i > 0 {
                 code.push('\n');
             }
             for line in def.lines() {
-                let _ = writeln!(code, "{indent}{line}");
+                let _ = writeln!(code, "  {line}");
             }
         }
-        for depth in (0..parts.len()).rev() {
-            let _ = writeln!(code, "{}end", "  ".repeat(depth));
-        }
+        code.push_str("end\n");
         let _ = write!(out, "\n{code}");
     }
     out
+}
+
+/// Lines that make each module of `A::B` that is not defined yet, so the wrapper can reopen a
+/// receiver that the original made a class (loaded first in replays) as well as a module.
+pub(crate) fn reopen(recv: &str) -> String {
+    let parts: Vec<&str> = recv.split("::").collect();
+    let mut code = String::new();
+    for i in 1..=parts.len() {
+        let path = parts[..i].join("::");
+        let _ = writeln!(code, "module {path}; end unless defined?(::{path})");
+    }
+    code
 }
 
 /// A shadow file: require it after the original. Each module function runs the original and

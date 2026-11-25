@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Ruby ports turn `Err("Mod::Error: message")` into that namespaced exception, and Java, Ruby and
+  PHP replays load the project's own classes, so a port that returns a project-defined exception
+  matches the recorded `error_type`. The Ruby wrapper reopens each receiver with `class << Mod`,
+  so it also loads over a class the original defined (#372, #457 by @SPD-RYUK).
 - `app record` spreads CLI and HTTP traps round-robin across every base case, deduplicates traps
   before capping at 300, always keeps the HTTP unknown-route probe (`GET /rust-anything-missing`),
   and reports how many traps were dropped (`traps_dropped` in JSON and CLI output) (#335, #454 by @Lewandox).

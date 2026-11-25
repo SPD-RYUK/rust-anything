@@ -1174,13 +1174,16 @@ fn ruby_modules_bridge_record_and_diff() {
     );
     let wrapper = std::fs::read_to_string(dir.join("ruby/textkit_rs.rb")).unwrap();
     assert!(
-        wrapper.contains("def self.slugify(text, sep = \"-\", max: nil)"),
+        wrapper.contains("class << Textkit::Words\n  def slugify(text, sep = \"-\", max: nil)"),
         "{wrapper}"
     );
     // Batches keep the original's other parameters, defaults and keywords.
     bridge::add_batches(&dir, &["slugify:text".into(), "page_count:total".into()]).unwrap();
     let wrapper = std::fs::read_to_string(dir.join("ruby/textkit_rs.rb")).unwrap();
-    assert!(wrapper.contains("class SlugifyBatch"), "{wrapper}");
+    assert!(
+        wrapper.contains("class Textkit::Words::SlugifyBatch"),
+        "{wrapper}"
+    );
     assert!(
         wrapper.contains("def run(sep = \"-\", max: nil)"),
         "{wrapper}"
