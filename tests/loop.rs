@@ -465,6 +465,68 @@ fn benchmark_awaits_async_typescript_calls_and_counts_rejections() {
 }
 
 #[test]
+fn benchmark_marks_functions_whose_cases_do_not_match() {
+    // #341: a function the port does not match (here: wrong, as `unimplemented!` would panic) was
+    // timed with the rest, and the cost of its failure set the overall verdict.
+    if !common::have("node") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!(
+        "rust-anything-ts-bench-failing-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("main.mts"),
+        "export function double(n: number): number { return n * 2; }\n\
+         export function triple(n: number): number { return n * 3; }\n",
+    )
+    .unwrap();
+    let dir = root.join("bridge");
+    bridge::bridge(&bridge::Options {
+        root: &root,
+        unit: "main.mts",
+        kind: Some(Kind::Napi),
+        out: Some(dir.clone()),
+        name: None,
+        force: false,
+        keep: Vec::new(),
+        lang: None,
+        batch: Vec::new(),
+        as_json: Vec::new(),
+        allocator: Default::default(),
+    })
+    .unwrap();
+    std::fs::write(
+        dir.join(harness::CASES),
+        "{\"fn\":\"double\",\"args\":[2],\"ok\":4}\n{\"fn\":\"triple\",\"args\":[2],\"ok\":6}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("index.cjs"),
+        "exports.double = (n) => n * 2\nexports.triple = (n) => { throw new Error('not implemented') }\n",
+    )
+    .unwrap();
+    let result = harness::bench(&harness::BenchOptions {
+        crate_dir: &dir,
+        min_ms: 1,
+        resolve_from: None,
+        node_args: &[],
+    });
+    std::fs::remove_dir_all(root).unwrap();
+    let rows = result.unwrap();
+    let failing: Vec<(&str, bool)> = rows.iter().map(|r| (r.name.as_str(), r.failing)).collect();
+    assert_eq!(failing, [("double", false), ("triple", true)], "{rows:?}");
+    let verdict = harness::verdict(&rows, rust_anything::lang::Lang::Ts);
+    assert_eq!(verdict.left_out, ["triple"]);
+    assert!(
+        (verdict.speedup - rows[0].speedup).abs() < 1e-9,
+        "{verdict:?}"
+    );
+}
+
+#[test]
 fn classes_are_bridged_recorded_and_replayed() {
     if !common::have("node") {
         return;
