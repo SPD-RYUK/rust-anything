@@ -544,7 +544,8 @@ enum AppCmd {
         /// Repository root.
         #[arg(default_value = ".")]
         repo: PathBuf,
-        /// Extra cases: JSONL of `{"name", "args": [...], "stdin", "env": {...}, "files": {path: text}}`.
+        /// Extra cases: JSONL of `{"name", "args": [...], "stdin", "env": {...}, "files": {path: text},
+        /// "remove": [paths]}`. `remove` deletes paths from the `--fresh` copy before the case runs.
         #[arg(long)]
         inputs: Option<PathBuf>,
         /// Normalizer: `timestamps`, `uuids`, `key-order`, or `name=regex` for your own. Repeatable;
@@ -807,11 +808,12 @@ enum AppCmd {
 }
 
 /// `3 distinct differences in 41 cases:` and a line per difference, most cases first.
-fn say_groups(groups: &[rust_anything::mismatch::Group]) {
+/// `cases` is the number of distinct failing cases: one case can differ in two ways, so it
+/// cannot be summed from the groups.
+fn say_groups(groups: &[rust_anything::mismatch::Group], cases: usize) {
     if groups.is_empty() {
         return;
     }
-    let cases: usize = groups.iter().map(|g| g.cases).sum();
     say!(
         "{} in {}:",
         counted(groups.len(), "distinct difference"),
@@ -832,7 +834,7 @@ fn say_replay(replay: &app::ReplayOutcome) {
             f.total
         );
     }
-    say_groups(&replay.groups);
+    say_groups(&replay.groups, replay.failures.len());
     for f in replay.failures.iter().take(20) {
         let fields: Vec<String> = f
             .problems
@@ -866,15 +868,18 @@ fn recorded_summary(
     dir: &std::path::Path,
     examples: usize,
     inputs: usize,
+    no_args: usize,
     traps: usize,
     dropped: Option<usize>,
 ) -> String {
+    let mut parts = format!("{examples} from examples, {inputs} from inputs");
+    if no_args > 0 {
+        parts.push_str(&format!(", {} with no arguments", counted(no_args, "run")));
+    }
     let head = format!(
-        "Recorded {} in {} ({} from examples, {} from inputs, {}",
+        "Recorded {} in {} ({parts}, {}",
         counted(cases, "case"),
         dir.display(),
-        examples,
-        inputs,
         counted(traps, "trap")
     );
     match dropped {
@@ -1267,7 +1272,7 @@ fn run() -> Result<ExitCode> {
                 if !d.missing.is_empty() {
                     say!("Missing exports: {}", d.missing.join(", "));
                 }
-                say_groups(&d.groups);
+                say_groups(&d.groups, d.mismatches.len());
                 for m in &d.mismatches {
                     if m.get("case").is_some() {
                         say!(
@@ -1498,6 +1503,9 @@ fn run() -> Result<ExitCode> {
             force,
             json,
         } => {
+            // An unsupported crate gets the shadow-module error before any build or diff.
+            let manifest = bridge::Manifest::load(&crate_dir)?;
+            rust_anything::enable::supported(&manifest)?;
             let diff_opts = harness::DiffOptions {
                 crate_dir: &crate_dir,
                 module: None,
@@ -1926,6 +1934,7 @@ fn run_app(command: AppCmd) -> Result<ExitCode> {
                     &outcome.dir,
                     outcome.examples,
                     outcome.inputs,
+                    outcome.no_args,
                     outcome.traps,
                     (outcome.traps_dropped > 0).then_some(outcome.traps_dropped)
                 )
@@ -2049,7 +2058,7 @@ fn run_app(command: AppCmd) -> Result<ExitCode> {
                 say!("{}", serde_json::to_string_pretty(&outcome)?);
             } else {
                 say!("{}/{} requests matched", outcome.matched, outcome.requests);
-                say_groups(&outcome.groups);
+                say_groups(&outcome.groups, outcome.mismatches.len());
                 if !outcome.mismatches.is_empty() {
                     say!("Log: {}", outcome.log.display());
                 }
@@ -2326,16 +2335,20 @@ mod tests {
         // already singular.
         let dir = Path::new("/tmp/app-cases");
         assert_eq!(
-            recorded_summary(1, dir, 0, 0, 1, None),
+            recorded_summary(1, dir, 0, 0, 0, 1, None),
             "Recorded 1 case in /tmp/app-cases (0 from examples, 0 from inputs, 1 trap)"
         );
         assert_eq!(
-            recorded_summary(2, dir, 1, 1, 61, None),
+            recorded_summary(2, dir, 1, 1, 0, 61, None),
             "Recorded 2 cases in /tmp/app-cases (1 from examples, 1 from inputs, 61 traps)"
         );
         assert_eq!(
-            recorded_summary(1, dir, 0, 0, 0, Some(1)),
+            recorded_summary(1, dir, 0, 0, 0, 0, Some(1)),
             "Recorded 1 case in /tmp/app-cases (0 from examples, 0 from inputs, 0 traps, 1 trap dropped)"
+        );
+        assert_eq!(
+            recorded_summary(1, dir, 0, 0, 1, 0, None),
+            "Recorded 1 case in /tmp/app-cases (0 from examples, 0 from inputs, 1 run with no arguments, 0 traps)"
         );
     }
 }

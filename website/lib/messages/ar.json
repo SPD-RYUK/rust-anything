@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "التثبيت",
-    "installDesc": "ثبّت CLI، ثم سجّل خادم MCP ومهارة سير العمل في Claude Code وCodex وCursor وGemini CLI.",
+    "installDesc": "ثبّت CLI، ثم سجّل خادم MCP ومهارة سير العمل في Claude Code وCodex وCursor وGemini CLI وOpenCode.",
     "installNote": "تتوفر ملفات ثنائية جاهزة لـ macOS وLinux وWindows في كل [إصدار على GitHub]({releases}).",
     "agentPrompt": "ثبّت Rust Anything: شغّل `cargo install rust-anything` ثم `rust-anything setup`.",
     "agentRestart": "أخبرني متى يجب أن أعيد تشغيلك.",

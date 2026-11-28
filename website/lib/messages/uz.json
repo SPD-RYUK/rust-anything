@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "O'rnatish",
-    "installDesc": "CLI'ni o'rnating, so'ng MCP serverni va workflow skill'ini Claude Code, Codex, Cursor va Gemini CLI'da ro'yxatdan o'tkazing.",
+    "installDesc": "CLI'ni o'rnating, so'ng MCP serverni va workflow skill'ini Claude Code, Codex, Cursor, Gemini CLI va OpenCode'da ro'yxatdan o'tkazing.",
     "installNote": "macOS, Linux va Windows uchun tayyor binary fayllar har bir [GitHub release]({releases}) sahifasida.",
     "agentPrompt": "Rust Anything'ni o'rnat: `cargo install rust-anything`, so'ng `rust-anything setup` ni ishga tushir.",
     "agentRestart": "Seni qachon qayta ishga tushirishim kerakligini ayt.",

@@ -8,7 +8,7 @@ const BODY = `# Rust Anything
 
 - npm: \`npm install -g rust-anything\`
 - cargo: \`cargo install rust-anything\`
-- Then: \`rust-anything setup\` registers the MCP server and the workflow skill with Claude Code, Codex, Cursor and Gemini CLI.
+- Then: \`rust-anything setup\` registers the MCP server and the workflow skill with Claude Code, Codex, Cursor, Gemini CLI and OpenCode.
 
 ## Prompt for a coding agent
 

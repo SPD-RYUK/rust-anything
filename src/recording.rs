@@ -127,8 +127,8 @@ pub fn coverage_line(c: &Value) -> Option<String> {
         .collect();
     if files.len() > 4 {
         missed.push(format!(
-            "{} more files, listed in {RECORDED_FROM}",
-            files.len() - 4
+            "{}, listed in {RECORDED_FROM}",
+            crate::report::count(files.len() - 4, "more file")
         ));
     }
     // `{:.0}` rounds 99.9% up to `100%`, which reads as full coverage while a line never ran:
@@ -487,6 +487,26 @@ mod tests {
         assert_eq!(
             coverage_line(&json!({"lines": 4, "reached": 3})).as_deref(),
             Some("the recorded cases ran 3 of the original's 4 lines (75%)")
+        );
+    }
+
+    #[test]
+    fn the_coverage_line_counts_one_more_file_in_the_singular() {
+        let line = |n: usize| {
+            let files: Vec<_> = (1..=n)
+                .map(|i| json!({"file": format!("src/f{i}.ts"), "lines": 10, "reached": 9, "missed": "3"}))
+                .collect();
+            coverage_line(&json!({"lines": 10 * n, "reached": 9 * n, "files": files})).unwrap()
+        };
+        let five = line(5);
+        assert!(
+            five.contains("; 1 more file, listed in recorded-from.json"),
+            "{five}"
+        );
+        let six = line(6);
+        assert!(
+            six.contains("; 2 more files, listed in recorded-from.json"),
+            "{six}"
         );
     }
 

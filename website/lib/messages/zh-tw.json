@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "安裝",
-    "installDesc": "安裝 CLI，接著在 Claude Code、Codex、Cursor 與 Gemini CLI 中註冊 MCP 伺服器與工作流程技能。",
+    "installDesc": "安裝 CLI，接著在 Claude Code、Codex、Cursor、Gemini CLI 與 OpenCode 中註冊 MCP 伺服器與工作流程技能。",
     "installNote": "macOS、Linux 與 Windows 的預先建置執行檔可在每個 [GitHub release]({releases}) 下載。",
     "agentPrompt": "安裝 Rust Anything：執行 `cargo install rust-anything`，然後執行 `rust-anything setup`。",
     "agentRestart": "需要重新啟動你的時候告訴我。",

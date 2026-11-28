@@ -1069,6 +1069,140 @@ fn app_record_prints_one_case_in_the_singular() {
 }
 
 #[test]
+fn app_record_without_examples_names_the_no_arguments_run() {
+    if !common::have("python3") {
+        return;
+    }
+    let repo = one_off(
+        "no-examples",
+        &[("cli.py", "import sys\nprint(\"args:\", sys.argv[1:])\n")],
+    );
+    let bin = env!("CARGO_BIN_EXE_rust-anything");
+    let record = |args: &[&str]| {
+        Command::new(bin)
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+    };
+    let out = record(&["app", "record", ".", "--", "python3", "cli.py"]);
+    let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+    let wrote_no_args = repo.join("rust/app-cases/no-args.toml").is_file();
+    let json = record(&["app", "record", ".", "--json", "--", "python3", "cli.py"]);
+    let printed_json = String::from_utf8_lossy(&json.stdout).into_owned();
+    std::fs::remove_dir_all(&repo).unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(printed.starts_with("Recorded 1 case in "), "{printed}");
+    assert!(
+        printed.contains("(0 from examples, 0 from inputs, 1 run with no arguments, 0 traps)"),
+        "{printed}"
+    );
+    assert!(wrote_no_args);
+    assert!(json.status.success(), "{json:?}");
+    assert!(printed_json.contains("\"no_args\": 1"), "{printed_json}");
+    let parsed: serde_json::Value = serde_json::from_str(&printed_json).unwrap();
+    assert_eq!(parsed["cases"], 1, "{printed_json}");
+    assert_eq!(parsed["no_args"], 1, "{printed_json}");
+}
+
+#[test]
+fn app_record_without_examples_and_a_timeout_counts_no_no_arguments_run() {
+    if !common::have("python3") {
+        return;
+    }
+    let repo = one_off(
+        "no-examples-timeout",
+        &[("cli.py", "import time\ntime.sleep(30)\n")],
+    );
+    let bin = env!("CARGO_BIN_EXE_rust-anything");
+    let record = |args: &[&str]| {
+        Command::new(bin)
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+    };
+    let out = record(&[
+        "app",
+        "record",
+        ".",
+        "--timeout",
+        "1",
+        "--",
+        "python3",
+        "cli.py",
+    ]);
+    let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let wrote_no_args = repo.join("rust/app-cases/no-args.toml").is_file();
+    let json = record(&[
+        "app",
+        "record",
+        ".",
+        "--timeout",
+        "1",
+        "--json",
+        "--",
+        "python3",
+        "cli.py",
+    ]);
+    let printed_json = String::from_utf8_lossy(&json.stdout).into_owned();
+    std::fs::remove_dir_all(&repo).unwrap();
+    assert!(out.status.success(), "{out:?} {stderr}");
+    assert!(printed.starts_with("Recorded 0 cases in "), "{printed}");
+    assert!(
+        printed.contains("(0 from examples, 0 from inputs, 0 traps)"),
+        "{printed}"
+    );
+    assert!(!printed.contains("with no arguments"), "{printed}");
+    assert!(!wrote_no_args);
+    assert!(json.status.success(), "{json:?}");
+    let parsed: serde_json::Value = serde_json::from_str(&printed_json).unwrap();
+    assert_eq!(parsed["cases"], 0, "{printed_json}");
+    assert!(
+        parsed.get("no_args").is_none(),
+        "no fallback case was written, so the count stays absent (zero): {printed_json}"
+    );
+    assert_eq!(parsed["timed_out"][0], "no-args", "{printed_json}");
+}
+
+#[cfg(unix)]
+#[test]
+fn app_replay_counts_a_case_with_two_differences_once() {
+    if !common::have("python3") {
+        return;
+    }
+    let repo = one_off(
+        "two-differences-one-case",
+        &[("cli.py", "import sys\nprint(\"args:\", sys.argv[1:])\n")],
+    );
+    let bin = env!("CARGO_BIN_EXE_rust-anything");
+    let recorded = Command::new(bin)
+        .args(["app", "record", ".", "--", "python3", "cli.py"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(recorded.status.success(), "{recorded:?}");
+    // `false` exits 1 with no output, so the one case differs in its status and its stdout.
+    let replayed = Command::new(bin)
+        .args(["app", "replay", ".", "--build", "false"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    let printed = String::from_utf8_lossy(&replayed.stdout).into_owned();
+    std::fs::remove_dir_all(&repo).unwrap();
+    assert!(!replayed.status.success(), "{replayed:?}");
+    assert!(printed.starts_with("0/1 cases passed"), "{printed}");
+    assert!(
+        printed.contains("2 distinct differences in 1 case:"),
+        "{printed}"
+    );
+    assert!(!printed.contains("in 2 cases"), "{printed}");
+    assert!(printed.contains("- no-args: status"), "{printed}");
+    assert!(printed.contains("stdout"), "{printed}");
+}
+
+#[test]
 fn a_written_file_named_by_a_normalized_value_replays() {
     if !common::have("node") {
         return;
@@ -1196,6 +1330,37 @@ fn app_record_and_replay_cli_reject_zero_timeout_without_touching_cases() {
         "{rep_err}"
     );
 
+    assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), original_cfg);
+    assert_eq!(std::fs::read_to_string(&case_path).unwrap(), original_case);
+    std::fs::remove_dir_all(&repo).unwrap();
+}
+
+#[test]
+fn app_replay_with_a_port_on_a_cli_recording_fails_before_running() {
+    let repo = one_off("port-on-cli", &[("cli.py", "print('hi')\n")]);
+    let cases_dir = repo.join("rust/app-cases");
+    std::fs::create_dir_all(&cases_dir).unwrap();
+    let cfg_path = cases_dir.join("rust-anything.json");
+    let case_path = cases_dir.join("no-args.toml");
+    let original_cfg = "{\"schema\":\"rust-anything/app@1\",\"name\":\"app\",\"run\":[\"python3\",\"cli.py\"],\"timeout_secs\":30,\"recorded\":[\"no-args\"]}\n";
+    let original_case = "stdout = \"hi\\n\"\n";
+    std::fs::write(&cfg_path, original_cfg).unwrap();
+    std::fs::write(&case_path, original_case).unwrap();
+
+    let rep = Command::new(env!("CARGO_BIN_EXE_rust-anything"))
+        .args(["app", "replay", ".", "--port", "9"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!rep.status.success(), "{rep:?}");
+    let rep_err = String::from_utf8_lossy(&rep.stderr);
+    assert!(
+        rep_err.contains("--port") && rep_err.contains("server recordings (`app record --http`)"),
+        "{rep_err}"
+    );
+
+    // It failed before running: no report was written and the cases are untouched.
+    assert!(!cases_dir.join("replay-report.md").exists());
     assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), original_cfg);
     assert_eq!(std::fs::read_to_string(&case_path).unwrap(), original_case);
     std::fs::remove_dir_all(&repo).unwrap();

@@ -541,7 +541,7 @@ fn tool_schemas() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "crate": crate_dir,
                 "count": { "type": "integer", "description": "Generated cases per function (default 200)." },
-                "inputs": { "type": "string", "description": "JSONL file of extra cases: {\"fn\": name, \"args\": [...]}." },
+                "inputs": { "type": "string", "description": "JSONL file of extra cases: {\"fn\": name, \"args\": [...]}, plus \"kwargs\": {...} for Python and Ruby arguments passed by keyword." },
                 "module": { "type": "string", "description": "JS only: import the original from this JS module instead of the TS source." },
                 "resolve_from": { "type": "string", "description": "Resolve npm packages from this folder's node_modules." },
                 "float_tolerance": { "type": "number", "description": "Numeric code: floats match when they differ by at most this times the larger magnitude (absolute below 1), e.g. 1e-9. Saved with the crate for diff and gate; 0 removes it." },
@@ -705,7 +705,7 @@ fn tool_schemas() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "repo": { "type": "string", "description": "Repository root." },
                 "run": { "type": "array", "items": { "type": "string" }, "description": "Command that runs the original, paths relative to repo: [\"python3\", \"cli.py\"]. Optional after the first record." },
-                "inputs": { "type": "string", "description": "JSONL of extra cases: {\"name\", \"args\": [...], \"stdin\", \"env\": {...}, \"files\": {path: text}}." },
+                "inputs": { "type": "string", "description": "JSONL of extra cases: {\"name\", \"args\": [...], \"stdin\", \"env\": {...}, \"files\": {path: text}, \"remove\": [paths]}; `remove` deletes paths from the `fresh` copy before the case runs." },
                 "normalize": { "type": "array", "items": { "type": "string" }, "description": "Normalizers: timestamps, uuids, key-order, or name=regex." },
                 "name": { "type": "string", "description": "Name the app is invoked by in its docs." },
                 "timeout": { "type": "integer", "description": "Seconds before a run is killed (default 30)." },
@@ -1248,6 +1248,8 @@ fn call(name: &str, args: &Value) -> Result<Value> {
                 !(partial && (!only.is_empty() || force)),
                 "`partial` cannot be combined with `only` or `force`"
             );
+            let manifest = bridge::Manifest::load(&crate_dir)?;
+            crate::enable::supported(&manifest)?;
             let diff_opts = harness::DiffOptions {
                 crate_dir: &crate_dir,
                 module: None,

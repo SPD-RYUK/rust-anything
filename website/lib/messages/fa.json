@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "نصب",
-    "installDesc": "CLI را نصب کنید و سپس سرور MCP و مهارت گردش‌کار را در Claude Code، Codex، Cursor و Gemini CLI ثبت کنید.",
+    "installDesc": "CLI را نصب کنید و سپس سرور MCP و مهارت گردش‌کار را در Claude Code، Codex، Cursor، Gemini CLI و OpenCode ثبت کنید.",
     "installNote": "باینری‌های از پیش ساخته برای macOS، Linux و Windows در هر [انتشار GitHub]({releases}) هست.",
     "agentPrompt": "Rust Anything را نصب کن: `cargo install rust-anything` را اجرا کن، سپس `rust-anything setup`.",
     "agentRestart": "بگو چه وقت باید دوباره راه‌اندازی‌ات کنم.",

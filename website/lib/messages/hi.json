@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "इंस्टॉल",
-    "installDesc": "CLI इंस्टॉल करें, फिर MCP सर्वर और वर्कफ़्लो स्किल को Claude Code, Codex, Cursor और Gemini CLI में दर्ज करें।",
+    "installDesc": "CLI इंस्टॉल करें, फिर MCP सर्वर और वर्कफ़्लो स्किल को Claude Code, Codex, Cursor, Gemini CLI और OpenCode में दर्ज करें।",
     "installNote": "macOS, Linux और Windows के पहले से बने बाइनरी हर [GitHub रिलीज़]({releases}) के साथ मिलते हैं।",
     "agentPrompt": "Rust Anything इंस्टॉल करो: `cargo install rust-anything` चलाओ, फिर `rust-anything setup`।",
     "agentRestart": "बताओ कि मुझे तुम्हें कब रीस्टार्ट करना है।",

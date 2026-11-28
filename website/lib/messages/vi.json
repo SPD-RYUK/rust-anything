@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Cài đặt",
-    "installDesc": "Cài CLI, sau đó đăng ký máy chủ MCP và skill quy trình làm việc với Claude Code, Codex, Cursor và Gemini CLI.",
+    "installDesc": "Cài CLI, sau đó đăng ký máy chủ MCP và skill quy trình làm việc với Claude Code, Codex, Cursor, Gemini CLI và OpenCode.",
     "installNote": "Tệp nhị phân dựng sẵn cho macOS, Linux và Windows có trong mỗi [bản phát hành GitHub]({releases}).",
     "agentPrompt": "Cài đặt Rust Anything: chạy `cargo install rust-anything`, rồi `rust-anything setup`.",
     "agentRestart": "Cho tôi biết khi nào cần khởi động lại bạn.",
