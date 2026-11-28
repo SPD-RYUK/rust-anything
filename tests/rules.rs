@@ -92,6 +92,35 @@ fn rules_are_added_once_and_listed() {
 }
 
 #[test]
+fn a_missing_folder_is_named_and_nothing_is_created() {
+    let parent = temp("missing");
+    let missing = parent.join("no-such-repo");
+
+    for add in [Vec::new(), vec!["keep NaN as null".to_string()]] {
+        let err = rules::add(&missing, &add).unwrap_err();
+        assert!(
+            format!("{err:#}").contains(&format!("no folder {}", missing.display())),
+            "{err:#}"
+        );
+        assert!(!missing.exists(), "a missing root must not be created");
+    }
+
+    for args in [vec!["rules"], vec!["rules", "--add", "keep NaN as null"]] {
+        let mut cmd = Command::new(CLI);
+        cmd.args(args).arg(&missing);
+        let out = cmd.output().unwrap();
+        assert!(!out.status.success(), "{out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(&format!("no folder {}", missing.display())),
+            "{stderr}"
+        );
+        assert!(!missing.exists(), "a missing root must not be created");
+    }
+    std::fs::remove_dir_all(&parent).unwrap();
+}
+
+#[test]
 fn a_crate_folder_adds_to_its_repository_and_task_md_carries_the_rules() {
     let repo = temp("crate");
     let dir = crate_in(&repo);

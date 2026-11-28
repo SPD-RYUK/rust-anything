@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Quraşdırma",
-    "installDesc": "CLI-ı quraşdırın, sonra MCP serveri və iş axını skill-ini Claude Code, Codex, Cursor və Gemini CLI-da qeydiyyatdan keçirin.",
+    "installDesc": "CLI-ı quraşdırın, sonra MCP serveri və iş axını skill-ini Claude Code, Codex, Cursor, Gemini CLI və OpenCode-da qeydiyyatdan keçirin.",
     "installNote": "macOS, Linux və Windows üçün hazır binary fayllar hər [GitHub release]({releases})-dədir.",
     "agentPrompt": "rust-anything-i quraşdır: `cargo install rust-anything`, sonra `rust-anything setup` işə sal.",
     "agentRestart": "Səni nə vaxt yenidən başlatmalı olduğumu de.",

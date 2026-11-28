@@ -287,37 +287,136 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-fn fill(stream: &mut impl Read, buf: &mut Vec<u8>, need: usize) -> Result<()> {
+/// A reader whose read timeout can be tightened as a deadline approaches: a socket
+/// can, the in-memory readers of tests cannot and need not.
+pub(crate) trait TimedRead: Read {
+    /// The read timeout already set on this reader, if it has one: tightening to a
+    /// deadline must never loosen it (a probe's five-second cap stays five seconds).
+    fn current_read_timeout(&self) -> Result<Option<Duration>> {
+        Ok(None)
+    }
+
+    fn tighten_read_timeout(&mut self, _timeout: Option<Duration>) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl TimedRead for TcpStream {
+    fn current_read_timeout(&self) -> Result<Option<Duration>> {
+        Ok(self.read_timeout()?)
+    }
+
+    fn tighten_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
+        // Tightening never loosens: keep whichever of the current and requested
+        // timeouts is smaller (`None` is no timeout at all, so it never wins).
+        let effective = match (self.read_timeout()?, timeout) {
+            (Some(existing), Some(requested)) => Some(existing.min(requested)),
+            (Some(existing), None) => Some(existing),
+            (None, requested) => requested,
+        };
+        self.set_read_timeout(effective)?;
+        Ok(())
+    }
+}
+
+impl TimedRead for &[u8] {}
+
+impl<T: Read, U: Read> TimedRead for std::io::Chain<T, U> {}
+
+impl<R: TimedRead + ?Sized> TimedRead for &mut R {
+    fn current_read_timeout(&self) -> Result<Option<Duration>> {
+        (**self).current_read_timeout()
+    }
+
+    fn tighten_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
+        (**self).tighten_read_timeout(timeout)
+    }
+}
+
+/// The time left to `deadline` as a read timeout, or the timeout error when it has run
+/// out. Every read under a deadline sets its timeout from it, so neither a peer that
+/// keeps bytes trickling nor one read after another can push the response past the
+/// deadline: the budget is for the whole response, not per read. A timeout already on
+/// the reader (a probe's five-second cap) is kept when more time than that remains,
+/// and shortened to what is left when less does.
+fn remaining(stream: &mut impl TimedRead, deadline: Option<Instant>) -> Result<()> {
+    if let Some(deadline) = deadline {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+        }
+        let effective = match stream.current_read_timeout()? {
+            Some(existing) => existing.min(left),
+            None => left,
+        };
+        stream.tighten_read_timeout(Some(effective))?;
+    }
+    Ok(())
+}
+
+/// One read, retried when the system call is interrupted: a signal landing during a
+/// socket read (`Interrupted system call`) is not the peer going away. With a deadline,
+/// each attempt first tightens the read timeout to the time left, and an expired
+/// deadline is a timeout instead of another read.
+fn read_more(
+    stream: &mut impl TimedRead,
+    chunk: &mut [u8],
+    deadline: Option<Instant>,
+) -> Result<usize> {
+    loop {
+        remaining(stream, deadline)?;
+        match stream.read(chunk) {
+            Ok(n) => return Ok(n),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn fill(
+    stream: &mut impl TimedRead,
+    buf: &mut Vec<u8>,
+    need: usize,
+    deadline: Option<Instant>,
+) -> Result<()> {
     let mut chunk = [0u8; 8192];
     while buf.len() < need {
-        let n = stream.read(&mut chunk)?;
+        let n = read_more(stream, &mut chunk, deadline)?;
         ensure!(n > 0, "the connection closed in the middle of the response");
         buf.extend_from_slice(&chunk[..n]);
     }
     Ok(())
 }
 
-fn chunk_line_end(stream: &mut impl Read, buf: &mut Vec<u8>) -> Result<usize> {
+fn chunk_line_end(
+    stream: &mut impl TimedRead,
+    buf: &mut Vec<u8>,
+    deadline: Option<Instant>,
+) -> Result<usize> {
     loop {
         if let Some(end) = find(buf, b"\r\n") {
             return Ok(end);
         }
         let need = buf.len() + 1;
-        fill(stream, buf, need)?;
+        fill(stream, buf, need, deadline)?;
     }
 }
 
-fn read_chunked(stream: &mut impl Read, mut buf: Vec<u8>) -> Result<Vec<u8>> {
+fn read_chunked(
+    stream: &mut impl TimedRead,
+    mut buf: Vec<u8>,
+    deadline: Option<Instant>,
+) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     loop {
-        let line_end = chunk_line_end(stream, &mut buf)?;
+        let line_end = chunk_line_end(stream, &mut buf, deadline)?;
         let size_text = String::from_utf8_lossy(&buf[..line_end]).into_owned();
         let size = usize::from_str_radix(size_text.split(';').next().unwrap_or("").trim(), 16)
             .with_context(|| format!("bad chunk size `{size_text}`"))?;
         buf.drain(..line_end + 2);
         if size == 0 {
             loop {
-                let line_end = chunk_line_end(stream, &mut buf)?;
+                let line_end = chunk_line_end(stream, &mut buf, deadline)?;
                 if line_end == 0 {
                     return Ok(body);
                 }
@@ -325,14 +424,18 @@ fn read_chunked(stream: &mut impl Read, mut buf: Vec<u8>) -> Result<Vec<u8>> {
             }
         }
         let end = size.checked_add(2).context("chunk size is too large")?;
-        fill(stream, &mut buf, end)?;
+        fill(stream, &mut buf, end, deadline)?;
         ensure!(&buf[size..end] == b"\r\n", "bad chunk terminator");
         body.extend_from_slice(&buf[..size]);
         buf.drain(..end);
     }
 }
 
-fn read_response(stream: &mut impl Read, head_only: bool) -> Result<Resp> {
+fn read_response(
+    stream: &mut impl TimedRead,
+    head_only: bool,
+    deadline: Option<Instant>,
+) -> Result<Resp> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     let (status, head, mut rest) = loop {
@@ -340,7 +443,7 @@ fn read_response(stream: &mut impl Read, head_only: bool) -> Result<Resp> {
             if let Some(i) = find(&buf, b"\r\n\r\n") {
                 break i;
             }
-            let n = stream.read(&mut chunk)?;
+            let n = read_more(stream, &mut chunk, deadline)?;
             ensure!(n > 0, "the connection closed before a full response");
             buf.extend_from_slice(&chunk[..n]);
         };
@@ -377,7 +480,7 @@ fn read_response(stream: &mut impl Read, head_only: bool) -> Result<Resp> {
     let body = if head_only || status == 204 || status == 304 || (100..200).contains(&status) {
         Vec::new()
     } else if chunked {
-        read_chunked(stream, rest)?
+        read_chunked(stream, rest, deadline)?
     } else if let Some(lengths) = headers.get("content-length") {
         let parse = |value: &str| -> Result<usize> {
             let value = value.trim();
@@ -392,13 +495,26 @@ fn read_response(stream: &mut impl Read, head_only: bool) -> Result<Resp> {
         for other in lengths {
             ensure!(parse(other)? == len, "conflicting Content-Length headers");
         }
-        fill(stream, &mut rest, len)?;
+        fill(stream, &mut rest, len, deadline)?;
         rest.truncate(len);
         rest
     } else {
-        stream
-            .read_to_end(&mut rest)
-            .context("reading close-delimited HTTP body")?;
+        // Under a deadline the reads tighten like the other framings do; with none,
+        // `read_to_end` is the same read with its own interrupted retry.
+        if deadline.is_some() {
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = read_more(stream, &mut chunk, deadline)?;
+                if n == 0 {
+                    break;
+                }
+                rest.extend_from_slice(&chunk[..n]);
+            }
+        } else {
+            stream
+                .read_to_end(&mut rest)
+                .context("reading close-delimited HTTP body")?;
+        }
         rest
     };
     Ok(Resp {
@@ -458,7 +574,7 @@ fn wait_ready(addr: SocketAddr, request: &str, deadline: Option<Instant>) -> Res
         if timeout.is_zero() {
             bail!("`{request}` did not answer 2xx within the wait ({last})");
         }
-        match send(addr, &probe, timeout) {
+        match send(addr, &probe, timeout, deadline) {
             Ok(resp) if resp.status < 300 => return Ok(()),
             Ok(resp) => last = format!("status {}", resp.status),
             Err(e) => last = format!("{e:#}"),
@@ -470,9 +586,9 @@ fn wait_ready(addr: SocketAddr, request: &str, deadline: Option<Instant>) -> Res
     }
 }
 
-fn send(addr: SocketAddr, req: &Req, timeout: Duration) -> Result<Resp> {
+fn send(addr: SocketAddr, req: &Req, timeout: Duration, deadline: Option<Instant>) -> Result<Resp> {
     let mut stream = connect(addr, req, &addr.to_string(), timeout)?;
-    read_response(&mut stream, req.method == "HEAD")
+    read_response(&mut stream, req.method == "HEAD", deadline)
 }
 
 /// Reads through to `inner` and keeps every byte read.
@@ -489,6 +605,16 @@ impl<R: Read> Read for Tee<R> {
     }
 }
 
+impl<R: TimedRead> TimedRead for Tee<R> {
+    fn current_read_timeout(&self) -> Result<Option<Duration>> {
+        self.inner.current_read_timeout()
+    }
+
+    fn tighten_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
+        self.inner.tighten_read_timeout(timeout)
+    }
+}
+
 /// Sends `req` as `send` does, keeping the client's `Host`, and returns the parsed response with
 /// the bytes it came in, so a proxy can relay them unchanged.
 pub(crate) fn exchange(addr: SocketAddr, req: &Req, timeout: Duration) -> Result<(Resp, Vec<u8>)> {
@@ -502,7 +628,7 @@ pub(crate) fn exchange(addr: SocketAddr, req: &Req, timeout: Duration) -> Result
         inner: stream,
         seen: Vec::new(),
     };
-    let resp = read_response(&mut tee, req.method == "HEAD")?;
+    let resp = read_response(&mut tee, req.method == "HEAD", None)?;
     Ok((resp, tee.seen))
 }
 
@@ -517,7 +643,7 @@ const HOP_HEADERS: [&str; 5] = [
 
 /// Reads one request from a client: the head, then a body framed by `Content-Length` or chunked.
 /// A client waiting on `Expect: 100-continue` is told to go on.
-pub(crate) fn read_request<S: Read + Write>(stream: &mut S) -> Result<Req> {
+pub(crate) fn read_request<S: TimedRead + Write>(stream: &mut S) -> Result<Req> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     let header_end = loop {
@@ -525,7 +651,7 @@ pub(crate) fn read_request<S: Read + Write>(stream: &mut S) -> Result<Req> {
             break i;
         }
         ensure!(buf.len() < 1 << 20, "the request head is too large");
-        let n = stream.read(&mut chunk)?;
+        let n = read_more(stream, &mut chunk, None)?;
         ensure!(n > 0, "the connection closed before a full request");
         buf.extend_from_slice(&chunk[..n]);
     };
@@ -565,11 +691,11 @@ pub(crate) fn read_request<S: Read + Write>(stream: &mut S) -> Result<Req> {
         .get("transfer-encoding")
         .is_some_and(|t| t.to_ascii_lowercase().contains("chunked"));
     let body = if chunked {
-        Some(read_chunked(stream, rest)?)
+        Some(read_chunked(stream, rest, None)?)
     } else if let Some(len) = framing.get("content-length") {
         let len: usize = len.parse().context("invalid Content-Length")?;
         let mut rest = rest;
-        fill(stream, &mut rest, len)?;
+        fill(stream, &mut rest, len, None)?;
         rest.truncate(len);
         Some(rest)
     } else {
@@ -1019,7 +1145,7 @@ fn run_all(
     let mut out = Vec::new();
     for req in reqs {
         let before = server.fallbacks().unwrap_or(0);
-        let resp = send(server.addr, req, timeout).map_err(|e| format!("{e:#}"));
+        let resp = send(server.addr, req, timeout, None).map_err(|e| format!("{e:#}"));
         if let Some(pace) = launch.pace {
             std::thread::sleep(pace);
         }
@@ -1827,6 +1953,7 @@ pub(crate) fn record(
         cases: 0,
         examples: counts[0],
         inputs: counts[1],
+        no_args: 0,
         traps: counts[2],
         traps_dropped,
         noisy: Vec::new(),
@@ -2645,14 +2772,16 @@ mod tests {
     #[test]
     fn informational_responses_do_not_replace_the_final_response() {
         let raw = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </app.js>\r\n\r\nHTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nok";
-        let response = read_response(&mut &raw[..], false).unwrap();
+        let response = read_response(&mut &raw[..], false, None).unwrap();
         assert_eq!(response.status, 201);
         assert_eq!(response.body, b"ok");
         assert!(!response.headers.contains_key("link"));
 
         let switching = b"HTTP/1.1 101 Switching Protocols\r\n\r\n";
         assert_eq!(
-            read_response(&mut &switching[..], false).unwrap().status,
+            read_response(&mut &switching[..], false, None)
+                .unwrap()
+                .status,
             101
         );
     }
@@ -2661,14 +2790,17 @@ mod tests {
     fn responses_parse_with_length_chunks_or_close() {
         let fixed =
             b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhelloEXTRA";
-        let r = read_response(&mut &fixed[..], false).unwrap();
+        let r = read_response(&mut &fixed[..], false, None).unwrap();
         assert_eq!((r.status, r.body.as_slice()), (200, &b"hello"[..]));
         assert_eq!(r.headers["content-type"], "text/plain");
         let chunked = b"HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nnot \r\n5;x=y\r\nfound\r\n0\r\n\r\n";
-        let r = read_response(&mut &chunked[..], false).unwrap();
+        let r = read_response(&mut &chunked[..], false, None).unwrap();
         assert_eq!((r.status, r.body.as_slice()), (404, &b"not found"[..]));
         let close = b"HTTP/1.0 500 Oops\r\n\r\nbye";
-        assert_eq!(read_response(&mut &close[..], false).unwrap().body, b"bye");
+        assert_eq!(
+            read_response(&mut &close[..], false, None).unwrap().body,
+            b"bye"
+        );
     }
 
     struct Client {
@@ -2681,6 +2813,8 @@ mod tests {
             self.sent.read(buf)
         }
     }
+
+    impl TimedRead for Client {}
 
     impl Write for Client {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -2771,25 +2905,231 @@ mod tests {
     #[test]
     fn malformed_http_chunks_are_errors() {
         let mut bad_ending = &b"1\r\naXX0\r\n\r\n"[..];
-        assert!(read_chunked(&mut bad_ending, Vec::new()).is_err());
+        assert!(read_chunked(&mut bad_ending, Vec::new(), None).is_err());
         let max = format!("{:x}\r\n", usize::MAX);
-        assert!(read_chunked(&mut max.as_bytes(), Vec::new()).is_err());
+        assert!(read_chunked(&mut max.as_bytes(), Vec::new(), None).is_err());
         let mut truncated = &b"1\r\na\r\n0\r\n"[..];
-        assert!(read_chunked(&mut truncated, Vec::new()).is_err());
+        assert!(read_chunked(&mut truncated, Vec::new(), None).is_err());
         let mut trailers = &b"1\r\na\r\n0\r\nX-Trailer: present\r\n\r\n"[..];
-        assert_eq!(read_chunked(&mut trailers, Vec::new()).unwrap(), b"a");
+        assert_eq!(read_chunked(&mut trailers, Vec::new(), None).unwrap(), b"a");
     }
 
     #[test]
     fn fixed_body_rejects_malformed_lengths_and_accepts_equal_duplicates() {
         let response = |lengths| {
             let msg = format!("HTTP/1.1 200 OK\r\n{lengths}\r\n\r\nabc trailing");
-            read_response(&mut msg.as_bytes(), false)
+            read_response(&mut msg.as_bytes(), false, None)
         };
         assert!(response("Content-Length: invalid").is_err());
         assert!(response("Content-Length: 3\r\nContent-Length: 4").is_err());
         let matching = response("Content-Length: 3\r\nContent-Length: 03").unwrap();
         assert_eq!(matching.body, b"abc");
+    }
+
+    #[test]
+    fn interrupted_reads_are_retried_not_a_missing_response() {
+        // Every other read is interrupted, as a signal landing in a socket read is:
+        // the response (and its body, read through `fill`) must still arrive whole.
+        struct Flaky {
+            sent: std::io::Cursor<Vec<u8>>,
+            interrupt: bool,
+        }
+
+        impl Read for Flaky {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.interrupt {
+                    self.interrupt = false;
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.interrupt = true;
+                // At most a few bytes a read, so the head and both body framings
+                // have to be refilled across reads, not arrive in one.
+                let limit = buf.len().min(3);
+                self.sent.read(&mut buf[..limit])
+            }
+        }
+
+        impl TimedRead for Flaky {}
+
+        let mut flaky = Flaky {
+            sent: std::io::Cursor::new(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec(),
+            ),
+            interrupt: true,
+        };
+        let r = read_response(&mut flaky, false, None).unwrap();
+        assert_eq!((r.status, r.body.as_slice()), (200, &b"hello"[..]));
+
+        let mut flaky = Flaky {
+            sent: std::io::Cursor::new(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+                    .to_vec(),
+            ),
+            interrupt: true,
+        };
+        let r = read_response(&mut flaky, false, None).unwrap();
+        assert_eq!(r.body, b"hello");
+    }
+
+    #[test]
+    fn interrupted_read_uses_the_smaller_of_probe_cap_and_remaining_deadline() {
+        struct Capped {
+            sent: std::io::Cursor<Vec<u8>>,
+            interrupt: bool,
+            current: Option<Duration>,
+            tightened: Vec<Option<Duration>>,
+        }
+
+        impl Read for Capped {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.interrupt {
+                    self.interrupt = false;
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.sent.read(buf)
+            }
+        }
+
+        impl TimedRead for Capped {
+            fn current_read_timeout(&self) -> Result<Option<Duration>> {
+                Ok(self.current)
+            }
+
+            fn tighten_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
+                self.current = timeout;
+                self.tightened.push(timeout);
+                Ok(())
+            }
+        }
+
+        let probe = |deadline: Instant| {
+            let mut reader = Capped {
+                sent: std::io::Cursor::new(b"x".to_vec()),
+                interrupt: true,
+                current: Some(Duration::from_secs(5)),
+                tightened: Vec::new(),
+            };
+            let mut chunk = [0; 8];
+            assert_eq!(
+                read_more(&mut reader, &mut chunk, Some(deadline)).unwrap(),
+                1
+            );
+            assert_eq!(&chunk[..1], b"x");
+            reader.tightened
+        };
+
+        // More than the probe cap remains: every attempt, the interrupted retry
+        // included, keeps the five-second cap instead of loosening to the deadline.
+        let kept = probe(Instant::now() + Duration::from_secs(60));
+        assert_eq!(
+            kept,
+            [Some(Duration::from_secs(5)), Some(Duration::from_secs(5))]
+        );
+
+        // Less than the cap remains: the timeout is shortened to what is left.
+        let shortened = probe(Instant::now() + Duration::from_secs(2));
+        assert_eq!(shortened.len(), 2);
+        assert!(
+            shortened
+                .iter()
+                .all(|t| t.is_some_and(|t| t <= Duration::from_secs(2))),
+            "{shortened:?}"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_read_past_its_deadline_is_a_timeout_not_a_retry_forever() {
+        struct AlwaysInterrupted;
+
+        impl Read for AlwaysInterrupted {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::Interrupted.into())
+            }
+        }
+
+        impl TimedRead for AlwaysInterrupted {}
+
+        let past = Instant::now() - Duration::from_secs(1);
+        let err = read_response(&mut AlwaysInterrupted, false, Some(past)).unwrap_err();
+        assert!(format!("{err:#}").contains("timed out"), "{err:#}");
+    }
+
+    #[test]
+    fn recurring_chunks_tighten_the_timeout_before_every_read_and_stop_at_the_deadline() {
+        // Successful reads used to skip the deadline check entirely (it lived only in
+        // the interrupted-retry branch), so a peer that keeps sending nonterminal
+        // chunks could hold a response open well past its overall deadline.
+        struct Chunks {
+            nonterminal: usize,
+            terminal_done: bool,
+            reads: usize,
+            tightens: usize,
+        }
+
+        impl Read for Chunks {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                let data: &[u8] = if self.nonterminal > 0 {
+                    self.nonterminal -= 1;
+                    b"1\r\na\r\n"
+                } else if !self.terminal_done {
+                    self.terminal_done = true;
+                    b"0\r\n\r\n"
+                } else {
+                    return Ok(0);
+                };
+                let n = data.len().min(buf.len());
+                buf[..n].copy_from_slice(&data[..n]);
+                Ok(n)
+            }
+        }
+
+        impl TimedRead for Chunks {
+            fn tighten_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
+                if timeout.is_some() {
+                    self.tightens += 1;
+                }
+                Ok(())
+            }
+        }
+
+        // With a live deadline the whole chunked body still arrives, and every read
+        // is preceded by a tighten to the remaining budget (one per read here).
+        let mut chunks = Chunks {
+            nonterminal: 5,
+            terminal_done: false,
+            reads: 0,
+            tightens: 0,
+        };
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let body = read_chunked(&mut chunks, Vec::new(), Some(deadline)).unwrap();
+        assert_eq!(body, b"aaaaa");
+        assert!(
+            chunks.reads > 1,
+            "several nonterminal chunks, several reads"
+        );
+        assert_eq!(
+            chunks.tightens, chunks.reads,
+            "the budget is set before every read"
+        );
+
+        // With an expired deadline the check happens before the very first read, so
+        // recurring chunks can neither extend nor start past the deadline.
+        let mut chunks = Chunks {
+            nonterminal: 100,
+            terminal_done: false,
+            reads: 0,
+            tightens: 0,
+        };
+        let past = Instant::now() - Duration::from_secs(1);
+        let result = read_chunked(&mut chunks, Vec::new(), Some(past));
+        assert!(
+            result.is_err(),
+            "the expired deadline must stop the recurring chunks"
+        );
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(err.contains("timed out"), "{err}");
+        assert_eq!(chunks.reads, 0, "no read once the deadline is gone");
     }
 
     #[test]
@@ -2803,7 +3143,7 @@ mod tests {
         }
 
         let response = &b"HTTP/1.0 200 OK\r\n\r\npartial"[..];
-        assert!(read_response(&mut response.chain(BrokenBody), false).is_err());
+        assert!(read_response(&mut response.chain(BrokenBody), false, None).is_err());
     }
 
     #[test]

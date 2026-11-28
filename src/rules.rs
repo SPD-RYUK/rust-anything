@@ -51,6 +51,7 @@ pub fn load(root: &Path) -> Vec<String> {
 /// Appends each rule that is not in the file yet, creating the file when needed. With no rules
 /// to add it only reads.
 pub fn add(root: &Path, rules: &[String]) -> Result<RulesOutcome> {
+    anyhow::ensure!(root.is_dir(), "no folder {}", root.display());
     let file = repo_of(root).join(FILE);
     let mut have = load(root);
     let mut added = Vec::new();

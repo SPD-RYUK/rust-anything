@@ -223,6 +223,45 @@ fn napi_package_installs_from_tarballs_and_falls_back_to_the_original() {
 }
 
 #[test]
+fn package_dry_run_names_what_it_counts() {
+    let root = project(
+        "pluralize",
+        &[
+            ("package.json", r#"{"name":"add-rs","version":"1.0.0"}"#),
+            (
+                "src/add.ts",
+                "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+            ),
+        ],
+    );
+    let dir = bridged(&root, "src/add.ts", Kind::Napi);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rust-anything"))
+        .args(["package", "--dry-run"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let first = stdout.lines().next().unwrap_or("");
+    let rest = first
+        .strip_prefix("Would write ")
+        .unwrap_or_else(|| panic!("{first}"));
+    let (count_str, rest) = rest.split_once(' ').unwrap_or_else(|| panic!("{first}"));
+    let count: usize = count_str.parse().unwrap_or_else(|_| panic!("{first}"));
+    let expected_word = if count == 1 { "file" } else { "files" };
+    assert!(rest.starts_with(expected_word), "{first}");
+    assert!(
+        rest[expected_word.len()..].starts_with(" for add-rs@1.0.0 in "),
+        "{first}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn napi_package_without_a_fallback_says_so() {
     let root = project(
         "napi-imports",

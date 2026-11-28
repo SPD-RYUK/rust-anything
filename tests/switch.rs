@@ -381,3 +381,237 @@ fn enable_only_rebinds_selected_functions_and_updates_when_expanded() {
     assert_eq!(std::fs::read(root.join("fuzzy.py")).unwrap(), before);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn disable_after_enable_only_reports_only_what_was_on() {
+    let root = scratch("ts-partial-disable", "mini");
+    let crate_dir = bridged(&root, "packages/a/src/util.ts", "util-rs", &[]);
+    let file = root.join("packages/a/src/util.ts");
+    let before = std::fs::read(&file).unwrap();
+    let bin = env!("CARGO_BIN_EXE_rust-anything");
+
+    let on = enable::enable_only(&crate_dir, Some(&["count".into()]), &[]).unwrap();
+    assert_eq!(on.functions, ["count"]);
+
+    let mut cmd = Command::new(bin);
+    cmd.args(["disable"]).arg(&crate_dir);
+    let printed = run(&mut cmd);
+    assert!(
+        printed.contains("Off: count runs in the original again"),
+        "{printed}"
+    );
+    assert!(!printed.contains("words"), "{printed}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+
+    // The JSON form reports the same list.
+    enable::enable_only(&crate_dir, Some(&["count".into()]), &[]).unwrap();
+    let mut cmd = Command::new(bin);
+    cmd.args(["disable", "--json"]).arg(&crate_dir);
+    let printed = run(&mut cmd);
+    let json: serde_json::Value = serde_json::from_str(&printed).unwrap();
+    assert_eq!(json["functions"], serde_json::json!(["count"]), "{printed}");
+    assert_eq!(json["on"], false, "{printed}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn disable_after_enable_only_work_does_not_report_old() {
+    // The Python block itself says `"old"` (`mode == "old"`), so an export of that
+    // name is only on when it is in the block's own list of names.
+    let root = std::env::temp_dir().join(format!(
+        "rust-anything-switch-work-old-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("pyproject.toml"),
+        "[project]\nname = \"work\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("work.py"),
+        "def work(text: str) -> str:\n    return text.upper()\n\ndef old(text: str) -> str:\n    return text\n",
+    )
+    .unwrap();
+    let crate_dir = root.join("rust/work-rs");
+    bridge::bridge(&bridge::Options {
+        root: &root,
+        unit: "work.py",
+        kind: None,
+        out: Some(crate_dir.clone()),
+        name: Some("work-rs".into()),
+        force: false,
+        keep: Vec::new(),
+        lang: None,
+        batch: Vec::new(),
+        as_json: Vec::new(),
+        allocator: Default::default(),
+    })
+    .unwrap();
+    let before = std::fs::read(root.join("work.py")).unwrap();
+
+    let on = enable::enable_only(&crate_dir, Some(&["work".into()]), &[]).unwrap();
+    assert_eq!(on.functions, ["work"]);
+    let off = enable::disable(&crate_dir).unwrap();
+    assert_eq!(off.functions, ["work"], "{off:?}");
+    assert_eq!(std::fs::read(root.join("work.py")).unwrap(), before);
+
+    let on = enable::enable_only(&crate_dir, Some(&["work".into(), "old".into()]), &[]).unwrap();
+    assert_eq!(on.functions, ["work", "old"]);
+    let off = enable::disable(&crate_dir).unwrap();
+    assert_eq!(off.functions, ["work", "old"], "{off:?}");
+    assert_eq!(std::fs::read(root.join("work.py")).unwrap(), before);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn disable_after_enable_only_sum_sum_does_not_report_sum() {
+    let root = std::env::temp_dir().join(format!(
+        "rust-anything-switch-sum-sum-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("package.json"),
+        "{\"name\":\"t\",\"version\":\"1.0.0\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("math.ts"),
+        "export function sum(a: number, b: number): number { return a + b }\n\
+         export function sum_sum(a: number, b: number): number { return a + b + a + b }\n",
+    )
+    .unwrap();
+    let crate_dir = root.join("rust/math-rs");
+    bridge::bridge(&bridge::Options {
+        root: &root,
+        unit: "math.ts",
+        kind: None,
+        out: Some(crate_dir.clone()),
+        name: Some("math-rs".into()),
+        force: false,
+        keep: Vec::new(),
+        lang: None,
+        batch: Vec::new(),
+        as_json: Vec::new(),
+        allocator: Default::default(),
+    })
+    .unwrap();
+    let before = std::fs::read(root.join("math.ts")).unwrap();
+
+    // `sum_sum = ...sum_sum` holds `sum = ...sum` as a substring, twice over: only the
+    // complete assignment counts.
+    let on = enable::enable_only(&crate_dir, Some(&["sum_sum".into()]), &[]).unwrap();
+    assert_eq!(on.functions, ["sum_sum"]);
+    let off = enable::disable(&crate_dir).unwrap();
+    assert_eq!(off.functions, ["sum_sum"], "{off:?}");
+    assert_eq!(std::fs::read(root.join("math.ts")).unwrap(), before);
+
+    let on = enable::enable_only(&crate_dir, Some(&["sum".into(), "sum_sum".into()]), &[]).unwrap();
+    assert_eq!(on.functions, ["sum", "sum_sum"]);
+    let off = enable::disable(&crate_dir).unwrap();
+    assert_eq!(off.functions, ["sum", "sum_sum"], "{off:?}");
+    assert_eq!(std::fs::read(root.join("math.ts")).unwrap(), before);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn disable_after_enable_only_a_multibyte_name_restores_the_file() {
+    let root = std::env::temp_dir().join(format!(
+        "rust-anything-switch-multibyte-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("package.json"),
+        "{\"name\":\"t\",\"version\":\"1.0.0\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("math.ts"),
+        "export function é(a: number): number { return a }\n\
+         export function é_é(a: number): number { return a + a }\n",
+    )
+    .unwrap();
+    let crate_dir = root.join("rust/math-rs");
+    bridge::bridge(&bridge::Options {
+        root: &root,
+        unit: "math.ts",
+        kind: None,
+        out: Some(crate_dir.clone()),
+        name: Some("math-rs".into()),
+        force: false,
+        keep: Vec::new(),
+        lang: None,
+        batch: Vec::new(),
+        as_json: Vec::new(),
+        allocator: Default::default(),
+    })
+    .unwrap();
+    let before = std::fs::read(root.join("math.ts")).unwrap();
+
+    // Checking `é` against the `é_é` assignment rejects a match that starts on a
+    // multibyte character; stepping over it must not slice into that character.
+    let on = enable::enable_only(&crate_dir, Some(&["é_é".into()]), &[]).unwrap();
+    assert_eq!(on.functions, ["é_é"]);
+    let off = enable::disable(&crate_dir).unwrap();
+    assert_eq!(off.functions, ["é_é"], "{off:?}");
+    assert_eq!(std::fs::read(root.join("math.ts")).unwrap(), before);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn enable_on_a_go_crate_says_use_the_shadow_module_before_any_build() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/go");
+    let dir = std::env::temp_dir().join(format!(
+        "rust-anything-switch-go-enable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    bridge::bridge(&bridge::Options {
+        root: &root,
+        unit: "strkit/",
+        kind: None,
+        out: Some(dir.clone()),
+        name: None,
+        force: false,
+        keep: Vec::new(),
+        lang: None,
+        batch: Vec::new(),
+        as_json: Vec::new(),
+        allocator: Default::default(),
+    })
+    .unwrap();
+    assert_eq!(
+        bridge::Manifest::load(&dir).unwrap().language,
+        rust_anything::lang::Lang::Go
+    );
+
+    let bin = env!("CARGO_BIN_EXE_rust-anything");
+    for extra in [
+        Vec::new(),
+        vec!["--force"],
+        vec!["--only", "Slugify"],
+        vec!["--partial"],
+    ] {
+        let out = Command::new(bin)
+            .args(["enable"])
+            .arg(&dir)
+            .args(&extra)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(!out.status.success(), "{stderr}");
+        assert!(stderr.contains("for Go use the shadow module"), "{stderr}");
+        assert!(
+            stderr.contains("RUST_ANYTHING_MODE=old|shadow|new"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("recorded cases match"), "{stderr}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

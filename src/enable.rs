@@ -331,13 +331,81 @@ pub fn disable(crate_dir: &Path) -> Result<Switched> {
             continue;
         };
         if let Some(restored) = remove(&text, &manifest.crate_name) {
+            for name in switched_in(&text, &manifest, file) {
+                if !out.functions.contains(&name) {
+                    out.functions.push(name);
+                }
+            }
             std::fs::write(&path, restored)
                 .with_context(|| format!("writing {}", path.display()))?;
             out.files.push(path);
         }
     }
-    out.functions = manifest.exports.iter().map(|f| f.name.clone()).collect();
     Ok(out)
+}
+
+/// The functions the unit's block in `text` had switched on, in the order the manifest lists
+/// the file's exports. A partially enabled unit (`--only`) switched on only some of them, and
+/// the block is what was on: JS rebinds each one (`add = __rustAnything_math_rs.add`), Python
+/// lists each one for `globals().update`, and a PowerShell block rebinds the whole file (a
+/// partial enable is refused there, so every export of the file was on).
+fn switched_in(text: &str, manifest: &Manifest, file: &str) -> Vec<String> {
+    let Some((start, end, _)) = find_block(text, &manifest.crate_name) else {
+        return Vec::new();
+    };
+    let block = &text[start..end];
+    let var = format!(
+        "__rustAnything_{}",
+        crate::front_door::ident(&manifest.crate_name)
+    );
+    // Only the names in the generated `for name in [...]` list were switched on: the word
+    // `old` also stands in the block (`mode == "old"`), so an export of that name must not
+    // be read as switched on from anywhere else in the block.
+    let python_names = python_name_list(block);
+    manifest
+        .exports
+        .iter()
+        .filter(|f| f.file == file)
+        .filter(|f| match manifest.language {
+            Lang::Powershell => true,
+            Lang::Python => {
+                python_names.is_some_and(|names| names.contains(&format!("{:?}", f.name)))
+            }
+            _ => assigned(block, &format!("{} = {var}.{}", f.name, f.name)),
+        })
+        .map(|f| f.name.clone())
+        .collect()
+}
+
+/// Whether `block` holds the complete generated assignment `assign`: the characters on
+/// either side must not be part of a longer name, so `sum_sum = …sum_sum` does not also
+/// count as an assignment of `sum`.
+fn assigned(block: &str, assign: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    let mut from = 0;
+    while let Some(at) = block[from..].find(assign) {
+        let start = from + at;
+        let end = start + assign.len();
+        let before = block[..start].chars().next_back();
+        let after = block[end..].chars().next();
+        if before.is_none_or(|c| !word(c)) && after.is_none_or(|c| !word(c)) {
+            return true;
+        }
+        // Advance by one whole character, not one byte: a rejected match can start
+        // inside a multibyte name (`é_é`), and slicing into it would panic.
+        from = start + block[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    false
+}
+
+/// The names listed in a Python block's generated `globals().update(...)`, as written
+/// there. The whole generated prefix is the marker, so nothing else in the block (the
+/// package path it joins, say) can be mistaken for the list.
+fn python_name_list(block: &str) -> Option<&str> {
+    let after = block
+        .split("globals().update({name: getattr(native, name) for name in [")
+        .nth(1)?;
+    after.split(']').next()
 }
 
 pub fn is_supported(manifest: &Manifest) -> bool {
@@ -349,7 +417,9 @@ pub fn is_supported(manifest: &Manifest) -> bool {
     )
 }
 
-fn supported(manifest: &Manifest) -> Result<()> {
+/// Ok when `enable` can switch this crate in place; the shadow-module error otherwise.
+/// Callers that build or diff before switching on check this first.
+pub fn supported(manifest: &Manifest) -> Result<()> {
     match manifest.language {
         _ if is_supported(manifest) => Ok(()),
         lang => bail!(

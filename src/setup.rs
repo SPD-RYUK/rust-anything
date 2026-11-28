@@ -183,6 +183,7 @@ pub struct Report {
     pub args: Vec<String>,
     pub agents: Vec<Agent>,
     pub changes: Vec<Change>,
+    pub remove: bool,
     pub dry_run: bool,
 }
 
@@ -259,6 +260,7 @@ pub fn setup(opts: &Options) -> Result<Report> {
         args: run.args,
         agents,
         changes,
+        remove: opts.remove,
         dry_run: opts.dry_run,
     })
 }
@@ -611,18 +613,38 @@ fn skill(agent: Agent, dir: &Path, opts: &Options) -> Result<Change> {
 /// The report for people.
 pub fn text(r: &Report) -> String {
     let mut out = String::new();
-    let verb = if r.dry_run { "Would set up" } else { "Set up" };
+    let (verb, prep) = match (r.remove, r.dry_run) {
+        (true, true) => ("Would remove", "from"),
+        (true, false) => ("Removed", "from"),
+        (false, true) => ("Would set up", "for"),
+        (false, false) => ("Set up", "for"),
+    };
     let names: Vec<&str> = r.agents.iter().map(|a| a.name()).collect();
-    out.push_str(&format!("{verb} rust-anything for {}\n", names.join(", ")));
+    out.push_str(&format!(
+        "{verb} rust-anything {prep} {}\n",
+        names.join(", ")
+    ));
+    let width = r
+        .agents
+        .iter()
+        .map(|a| a.name().len())
+        .chain(r.changes.iter().map(|c| c.agent.name().len()))
+        .max()
+        .unwrap_or(0);
     for c in &r.changes {
         out.push_str(&format!(
-            "  {:<10} {:<9} {}\n",
+            "  {:<width$} {:<9} {}\n",
             c.agent.name(),
             c.action,
             c.file.display()
         ));
         if let Some(b) = &c.backup {
-            out.push_str(&format!("  {:<10} {:<9} {}\n", "", "backup", b.display()));
+            out.push_str(&format!(
+                "  {:<width$} {:<9} {}\n",
+                "",
+                "backup",
+                b.display()
+            ));
         }
     }
     if !r.dry_run
@@ -1055,5 +1077,63 @@ mod tests {
             again.changes
         );
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn removal_reports_say_removed_and_line_up() {
+        let report = |remove: bool, dry_run: bool| Report {
+            command: PathBuf::from("/opt/bin/rust-anything"),
+            args: vec!["mcp".into()],
+            agents: vec![Agent::Claude, Agent::Cursor],
+            changes: vec![
+                Change {
+                    agent: Agent::Claude,
+                    file: PathBuf::from("claude.json"),
+                    action: "removed",
+                    backup: Some(PathBuf::from("claude.json.rust-anything.bak")),
+                },
+                Change {
+                    agent: Agent::Cursor,
+                    file: PathBuf::from("mcp.json"),
+                    action: "removed",
+                    backup: None,
+                },
+            ],
+            remove,
+            dry_run,
+        };
+        assert!(
+            text(&report(true, false))
+                .starts_with("Removed rust-anything from Claude Code, Cursor\n"),
+            "{}",
+            text(&report(true, false))
+        );
+        assert!(
+            text(&report(true, true))
+                .starts_with("Would remove rust-anything from Claude Code, Cursor\n"),
+            "{}",
+            text(&report(true, true))
+        );
+        assert!(
+            text(&report(false, false))
+                .starts_with("Set up rust-anything for Claude Code, Cursor\n"),
+            "{}",
+            text(&report(false, false))
+        );
+        assert!(
+            text(&report(false, true))
+                .starts_with("Would set up rust-anything for Claude Code, Cursor\n"),
+            "{}",
+            text(&report(false, true))
+        );
+
+        // "Claude Code" is the longest name, so the file column starts at the
+        // same place in every row, backup rows included.
+        let printed = text(&report(true, false));
+        let rows: Vec<&str> = printed.lines().skip(1).collect();
+        assert_eq!(rows.len(), 3, "{printed}");
+        assert_eq!(&rows[0][24..], "claude.json", "{printed}");
+        assert_eq!(&rows[1][24..], "claude.json.rust-anything.bak", "{printed}");
+        assert_eq!(&rows[2][24..], "mcp.json", "{printed}");
     }
 }

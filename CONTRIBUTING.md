@@ -60,6 +60,10 @@ paths in what you commit. CI runs it on every file.
   - `tests/analyze.rs`: language detection, units, risks, dependencies, `--whole-app`.
   - `tests/loop.rs`: bridge, record, diff and shadow per language, with stand-ins instead of builds.
   - `tests/native.rs`: bridges built for real, then loaded and replayed.
+  - `tests/end_state.rs`: `bridge --end-state` kept in the manifest, and no end state without the
+    flag.
+  - `tests/state_through_calls.rs`: a function that reaches app state through another stays in the
+    original, while the pure rest is bridged.
   - `tests/app.rs` and `tests/http.rs`: whole-app record, replay, front door and lift, for CLIs and
     servers.
   - `tests/app_fresh.rs`: `app record --fresh`, where each case starts from a snapshot of a project
@@ -69,6 +73,7 @@ paths in what you commit. CI runs it on every file.
   - `tests/library.rs`: whole-library ports.
   - `tests/effects.rs`: side effects (mail sent, rows written) that make a replay fail even when
     the output matches.
+  - `tests/mime.rs`: mail headers and parts decoded for recording, in windows-1252 and Latin-1.
   - `tests/fuzz.rs`: `fuzz` and `record --pin-clock`.
   - `tests/sandbox.rs`: `record --sandbox` and `app record --sandbox` (no network, read-only
     source tree); skipped where bubblewrap or sandbox-exec cannot run.

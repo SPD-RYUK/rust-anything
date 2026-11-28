@@ -422,15 +422,18 @@ pub fn svg(card: &Card) -> String {
         speed_phrase(card.speedup)
     };
     let all = card.matched == card.cases && card.cases > 0;
+    // A crate recorded from one input has one case, so every count here reads singular for one
+    // (issue #887).
     let headline = if all {
         format!(
-            "Same result as the original on all {} recorded cases",
-            card.cases
+            "Same result as the original on all {}",
+            crate::report::count(card.cases, "recorded case")
         )
     } else {
         format!(
-            "{} of {} recorded cases match the original",
-            card.matched, card.cases
+            "{} of {} match the original",
+            card.matched,
+            crate::report::count(card.cases, "recorded case")
         )
     };
     let per_call = if timed.len() == 1 {
@@ -465,8 +468,11 @@ pub fn svg(card: &Card) -> String {
 </svg>
 "##,
         label = esc(&format!(
-            "{}: {} of {} recorded cases match, {}",
-            card.crate_name, card.matched, card.cases, speed
+            "{}: {} of {} match, {}",
+            card.crate_name,
+            card.matched,
+            crate::report::count(card.cases, "recorded case"),
+            speed
         )),
         name = esc(&card.crate_name),
         title_size = if card.crate_name.chars().count() > 22 {
@@ -751,5 +757,24 @@ mod tests {
         );
         c.matched = c.cases;
         assert!(!markdown(&c).contains("Remaining differences"));
+    }
+
+    #[test]
+    fn one_recorded_case_reads_singular_in_the_headline_and_the_label() {
+        // Issue #887: `record --count 0 --inputs one.jsonl` gives a crate one case, and the card said
+        // "all 1 recorded cases".
+        let mut one = card();
+        one.cases = 1;
+        one.matched = 1;
+        let out = svg(&one);
+        assert!(
+            out.contains("Same result as the original on all 1 recorded case:"),
+            "{out}"
+        );
+        assert!(!out.contains("1 recorded cases"), "{out}");
+        assert!(out.contains("1 of 1 recorded case match"), "{out}");
+        // The plural is unchanged.
+        let many = svg(&card());
+        assert!(many.contains("all 412 recorded cases"), "{many}");
     }
 }

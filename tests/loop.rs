@@ -1137,6 +1137,55 @@ fn python_modules_bridge_record_and_diff() {
 }
 
 #[test]
+fn module_is_refused_for_a_python_crate() {
+    let root = std::env::temp_dir().join(format!(
+        "rust-anything-module-python-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("pyproject.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("words.py"),
+        "def words(s: str) -> int:\n    return len(s.split())\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("built.js"), "module.exports = {}\n").unwrap();
+    let bin = env!("CARGO_BIN_EXE_rust-anything");
+    let bridged = Command::new(bin)
+        .args(["bridge", ".", "words.py"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        bridged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bridged.stderr)
+    );
+    let crate_dir = root.join("rust/words-rs");
+
+    for args in [
+        vec!["record", "--count", "2", "--module", "built.js"],
+        vec!["diff", "--module", "built.js"],
+    ] {
+        let mut cmd = Command::new(bin);
+        cmd.arg(args[0]).arg(&crate_dir).args(&args[1..]);
+        let out = cmd.current_dir(&root).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(!out.status.success(), "{stderr}");
+        assert!(stderr.contains("--module is for TS/JS crates"), "{stderr}");
+        assert!(stderr.contains("Python"), "{stderr}");
+    }
+    // Nothing ran: no recording was written for the refused `record`.
+    assert!(!crate_dir.join("cases.jsonl").exists());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn c_bridge_string_helper_does_not_collide_with_source_names() {
     let root = std::env::temp_dir().join(format!("rust-anything-c-names-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

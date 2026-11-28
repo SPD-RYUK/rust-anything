@@ -589,8 +589,31 @@ mod tests {
         let cleared = env(&mut sandbox.wrap(&plain, false).unwrap());
         let unsandboxed = env(&mut plain);
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(inherited, unsandboxed);
-        assert_eq!(cleared, "FOO=1\n");
+        // The order of `env`'s lines is the sandbox tool's, and on Linux the sandbox sets
+        // `TMPDIR` to its scratch folder on purpose. Compare the variables, and name the ones
+        // that differ: a failure must not print the environment, which can hold tokens.
+        let vars = |text: &str| -> std::collections::BTreeMap<String, String> {
+            text.lines()
+                .filter_map(|line| line.split_once('='))
+                .filter(|(name, _)| *name != "TMPDIR")
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect()
+        };
+        let (inherited, unsandboxed, cleared) =
+            (vars(&inherited), vars(&unsandboxed), vars(&cleared));
+        let differing: Vec<&String> = inherited
+            .keys()
+            .chain(unsandboxed.keys())
+            .filter(|name| inherited.get(*name) != unsandboxed.get(*name))
+            .collect();
+        assert!(differing.is_empty(), "the sandbox changed: {differing:?}");
+        // Nothing is inherited when the environment is cleared: only what the command sets.
+        assert_eq!(cleared.keys().collect::<Vec<_>>(), ["FOO"]);
+        // The value the command set is the value it sees (the message does not print it).
+        assert!(
+            cleared.get("FOO").is_some_and(|value| value == "1"),
+            "FOO was not kept as the command set it"
+        );
     }
 
     #[test]
