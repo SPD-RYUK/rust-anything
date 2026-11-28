@@ -275,7 +275,7 @@ fn work_dir(crate_dir: &Path, mode: &str) -> Result<PathBuf> {
 fn check_language(m: &Manifest) -> Result<()> {
     if !matches!(m.language, Lang::Java | Lang::Kotlin) {
         bail!(
-            "on-device recording needs a JVM crate (Java or Kotlin), not {}",
+            "--profile android needs a JVM crate (Java or Kotlin), not {}",
             m.language.name()
         );
     }
