@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Installation",
-    "installDesc": "Installiere die CLI und registriere dann den MCP-Server und den Workflow-Skill bei Claude Code, Codex, Cursor und Gemini CLI.",
+    "installDesc": "Installiere die CLI und registriere dann den MCP-Server und den Workflow-Skill bei Claude Code, Codex, Cursor, Gemini CLI und OpenCode.",
     "installNote": "Vorkompilierte Binaries für macOS, Linux und Windows gibt es bei jedem [GitHub-Release]({releases}).",
     "agentPrompt": "Installiere Rust Anything: führe `cargo install rust-anything` aus, dann `rust-anything setup`.",
     "agentRestart": "Sag mir, wann ich dich neu starten soll.",

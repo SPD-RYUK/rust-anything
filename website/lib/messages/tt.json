@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Урнаштыру",
-    "installDesc": "CLI'ны урнаштырыгыз, аннары MCP серверны һәм workflow skill'ны Claude Code, Codex, Cursor һәм Gemini CLI'да теркәгез.",
+    "installDesc": "CLI'ны урнаштырыгыз, аннары MCP серверны һәм workflow skill'ны Claude Code, Codex, Cursor, Gemini CLI һәм OpenCode'да теркәгез.",
     "installNote": "macOS, Linux һәм Windows өчен әзер бинар файллар һәр [GitHub релизында]({releases}).",
     "agentPrompt": "Rust Anything урнаштыр: `cargo install rust-anything` җибәр, аннары `rust-anything setup`.",
     "agentRestart": "Сине кайчан яңадан җибәрергә кирәклеген әйт.",

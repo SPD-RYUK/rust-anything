@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Instal",
-    "installDesc": "Instal CLI, lalu daftarkan server MCP dan skill alur kerja ke Claude Code, Codex, Cursor, dan Gemini CLI.",
+    "installDesc": "Instal CLI, lalu daftarkan server MCP dan skill alur kerja ke Claude Code, Codex, Cursor, Gemini CLI, dan OpenCode.",
     "installNote": "Biner siap pakai untuk macOS, Linux, dan Windows tersedia di setiap [rilis GitHub]({releases}).",
     "agentPrompt": "Instal Rust Anything: jalankan `cargo install rust-anything`, lalu `rust-anything setup`.",
     "agentRestart": "Beri tahu aku kapan harus memulai ulang kamu.",

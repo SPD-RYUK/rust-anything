@@ -275,7 +275,7 @@ fn work_dir(crate_dir: &Path, mode: &str) -> Result<PathBuf> {
 fn check_language(m: &Manifest) -> Result<()> {
     if !matches!(m.language, Lang::Java | Lang::Kotlin) {
         bail!(
-            "on-device recording needs a JVM crate (Java or Kotlin), not {}",
+            "--profile android needs a JVM crate (Java or Kotlin), not {}",
             m.language.name()
         );
     }
@@ -396,5 +396,26 @@ mod tests {
     #[test]
     fn chooses_an_explicit_serial_without_adb() {
         assert_eq!(select(Some("emulator-5554")).unwrap(), "emulator-5554");
+    }
+
+    #[test]
+    fn android_profile_reports_non_jvm_language() {
+        let manifest: Manifest = serde_json::from_str(
+            r#"{
+                "schema": "rust-anything/bridge@1",
+                "root": ".",
+                "unit": "src/add.ts",
+                "language": "ts",
+                "kind": "napi",
+                "crate_name": "add-rs",
+                "exports": []
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            check_language(&manifest).unwrap_err().to_string(),
+            "--profile android needs a JVM crate (Java or Kotlin), not TypeScript/JavaScript"
+        );
     }
 }

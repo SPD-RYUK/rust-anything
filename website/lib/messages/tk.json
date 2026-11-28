@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Gurnamak",
-    "installDesc": "CLI-ni gurnaň, soňra MCP serweri we workflow skill-ini Claude Code, Codex, Cursor we Gemini CLI bilen hasaba alyň.",
+    "installDesc": "CLI-ni gurnaň, soňra MCP serweri we workflow skill-ini Claude Code, Codex, Cursor, Gemini CLI we OpenCode bilen hasaba alyň.",
     "installNote": "macOS, Linux we Windows üçin taýýar binar faýllar her [GitHub release]({releases}) sahypasynda bar.",
     "agentPrompt": "Rust Anything gurna: `cargo install rust-anything`, soňra `rust-anything setup` işlet.",
     "agentRestart": "Seni haçan täzeden başlatmalydygyny maňa aýt.",

@@ -10,7 +10,7 @@ const MAX_DEPTH: usize = 16;
 /// Parse a raw SMTP DATA payload into a stable, mailer-independent view:
 /// canonical decoded headers (`From`, `To`, `Cc`, `Subject`) followed by each
 /// leaf MIME part (`part <type>` + decoded body, or `attachment <name> (<type>, <size> bytes, sha256:<hex>)`).
-pub(crate) fn format_email(raw: &str) -> String {
+pub fn format_email(raw: &str) -> String {
     let normalized = raw.replace("\r\n", "\n");
     let (headers, body) = split_headers_body(&normalized);
     let mut out = String::new();
@@ -365,9 +365,12 @@ pub(crate) fn decode_header_value(input: &str) -> String {
         }
 
         flush(&mut out, &mut pending_charset, &mut pending_bytes);
-        if let Some(pos) = rest[1..].find("=?") {
-            out.push_str(&rest[..pos + 1]);
-            rest = &rest[pos + 1..];
+        // Advance past the whole first character: slicing at byte 1 would split a
+        // multibyte one (`é` and the like) and panic.
+        let first = rest.chars().next().map_or(0, char::len_utf8);
+        if let Some(pos) = rest[first..].find("=?") {
+            out.push_str(&rest[..pos + first]);
+            rest = &rest[pos + first..];
         } else {
             out.push_str(rest);
             break;
@@ -500,11 +503,26 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
+/// What windows-1252 puts in 0x80..=0x9F, where Latin-1 has the C1 controls. The five
+/// undefined bytes (0x81, 0x8D, 0x8F, 0x90, 0x9D) stay as they are.
+const WINDOWS_1252_HIGH: [char; 32] = [
+    '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}',
+    '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+];
+
 fn decode_charset(bytes: &[u8], charset: &str) -> String {
     let cs = charset.trim().to_ascii_lowercase();
-    if matches!(
+    if matches!(cs.as_str(), "windows-1252" | "cp1252") {
+        bytes
+            .iter()
+            .map(|&b| match b {
+                0x80..=0x9f => WINDOWS_1252_HIGH[usize::from(b - 0x80)],
+                _ => b as char,
+            })
+            .collect()
+    } else if matches!(
         cs.as_str(),
-        "iso-8859-1" | "iso8859-1" | "latin1" | "latin-1" | "windows-1252" | "cp1252"
+        "iso-8859-1" | "iso8859-1" | "latin1" | "latin-1"
     ) {
         bytes.iter().map(|&b| b as char).collect()
     } else {
@@ -696,5 +714,27 @@ JVBERi0xLjQ=\r\n\
             decode_header_value("=?ISO-8859-1?Q?Caf=E9?= bar"),
             "Café bar"
         );
+    }
+
+    #[test]
+    fn windows_1252_decodes_its_printable_punctuation() {
+        assert_eq!(
+            decode_header_value("=?windows-1252?Q?=80_=93hi=94?="),
+            "€ “hi”"
+        );
+        let mail = "Content-Type: text/plain; charset=\"windows-1252\"\r\n\
+                    Content-Transfer-Encoding: quoted-printable\r\n\
+                    \r\n\
+                    =93hi=94 costs =805\r\n";
+        let out = format_email(mail);
+        assert!(out.contains("part text/plain\n“hi” costs €5\n"), "{out}");
+        // `cp1252` is the same encoding, undefined bytes stay as they are, and
+        // Latin-1 keeps decoding byte for byte.
+        assert_eq!(decode_charset(&[0x80, 0x81, 0x93], "cp1252"), "€\u{81}“");
+        assert_eq!(
+            decode_charset(&[0x80, 0x93, 0x94], "iso-8859-1"),
+            "\u{80}\u{93}\u{94}"
+        );
+        assert_eq!(decode_charset(&[0xe9], "latin1"), "é");
     }
 }

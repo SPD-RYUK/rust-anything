@@ -110,6 +110,11 @@ pub fn pick(report: &Report, function: Option<&str>) -> Result<Pick> {
                 format!("`{name}` is not among the hot functions of this run (see `rust-anything profile`)")
             })?,
         None => report.hot.iter().find(eligible).with_context(|| {
+            if report.hot.is_empty() {
+                return "no hot function to port: the profile found no significant time in the \
+                        repository's own code. Try a workload that spends more time in that code."
+                    .into();
+            }
             if report.hot.iter().any(|h| crosses(&h) && h.mostly_waits()) {
                 let summary = report
                     .child_summary()
@@ -843,6 +848,21 @@ mod tests {
         assert!(
             named.contains("cannot be bridged") && named.contains("takes or returns a function"),
             "{named}"
+        );
+    }
+
+    #[test]
+    fn empty_profile_suggests_a_workload_that_runs_repository_code() {
+        let mut r = report(vec![]);
+        r.repo_pct = 0.0;
+        let err = pick(&r, None).unwrap_err().to_string();
+        assert!(
+            err.contains("the profile found no significant time in the repository's own code"),
+            "{err}"
+        );
+        assert!(
+            err.contains("Try a workload that spends more time in that code"),
+            "{err}"
         );
     }
 

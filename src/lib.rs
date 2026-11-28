@@ -62,7 +62,7 @@ pub mod library;
 pub mod lift;
 pub mod mcp;
 pub mod mcp_prompts;
-mod mime;
+pub mod mime;
 pub mod mismatch;
 pub mod package;
 pub mod pin;

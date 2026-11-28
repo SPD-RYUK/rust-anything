@@ -315,6 +315,19 @@ pub(crate) fn generate_cases_salted(
     Ok((cases, traps, regex_functions))
 }
 
+/// `--module` names a JS module the original is imported from, so only a TS/JS crate can
+/// take it; any other language would hand the path to its own driver as an import name.
+fn check_module(module: Option<&Path>, manifest: &Manifest) -> Result<()> {
+    if module.is_some() {
+        anyhow::ensure!(
+            manifest.language == crate::lang::Lang::Ts,
+            "--module is for TS/JS crates, and this crate is {}",
+            manifest.language.name()
+        );
+    }
+    Ok(())
+}
+
 /// `--count 0` with no `--inputs` (or `--from-tests`) would record nothing and replace
 /// `cases.jsonl` with an empty file, so it is refused before anything is touched.
 fn check_count(opts: &RecordOptions) -> Result<()> {
@@ -443,6 +456,7 @@ pub fn record(opts: &RecordOptions) -> Result<RecordOutcome> {
         ..*opts
     };
     let manifest = Manifest::load(opts.crate_dir)?;
+    check_module(opts.module, &manifest)?;
     let (cases, traps, regex_functions) = generate_cases(opts, &manifest)?;
 
     let timed_out_path = opts.crate_dir.join(WORK_DIR).join(TIMED_OUT);
@@ -499,6 +513,7 @@ pub fn record_android(opts: &RecordOptions, device: Option<&str>) -> Result<Reco
     );
     check_count(opts)?;
     let manifest = Manifest::load(opts.crate_dir)?;
+    check_module(opts.module, &manifest)?;
     let (cases, traps, regex_functions) = generate_cases(opts, &manifest)?;
     let _ = std::fs::remove_file(opts.crate_dir.join(WORK_DIR).join(TIMED_OUT));
     let out = crate::android_device::record(opts.crate_dir, &manifest, &cases, device)?;
@@ -1330,6 +1345,7 @@ pub fn diff_android(
     jni_libs: Option<&Path>,
 ) -> Result<DiffOutcome> {
     let manifest = Manifest::load(opts.crate_dir)?;
+    check_module(opts.module, &manifest)?;
     diff_after(
         opts,
         crate::android_device::diff(opts.crate_dir, &manifest, device, jni_libs)?,
@@ -1388,6 +1404,9 @@ pub(crate) fn diff_exact(opts: &DiffOptions) -> Result<DiffOutcome> {
         crate_dir: &crate_dir,
         ..*opts
     };
+    if opts.module.is_some() {
+        check_module(opts.module, &Manifest::load(opts.crate_dir)?)?;
+    }
     if opts.module.is_none()
         && let Ok(manifest) = Manifest::load(opts.crate_dir)
         && let Some(built) = stale_build(opts.crate_dir, &manifest)

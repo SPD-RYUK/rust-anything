@@ -90,7 +90,8 @@ rust-anything app replay . --build "target/release/mytool"
 
 - `app record` runs the original on the app's own documented examples (`$ mytool ...` lines in
   its Markdown and shell files, with the files they name), an `--inputs` JSONL file
-  (`{"name", "args", "stdin", "env", "files"}`), and semantic traps derived from those cases
+  (`{"name", "args", "stdin", "env", "files", "remove"}`; `remove` deletes paths from the
+  `--fresh` copy before the case runs), and semantic traps derived from those cases
   (non-ASCII and emoji strings, negative division and modulo, overflow, large and tiny floats,
   map order, missing files). Each case runs twice; what differs between the two runs becomes a
   `[..]` wildcard. `--normalize timestamps|uuids|key-order` or `--normalize name=regex` adds

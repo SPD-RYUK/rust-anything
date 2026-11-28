@@ -383,9 +383,10 @@ pub fn parse_port(source: &str) -> PortApi {
 
 /// Type names a port may import instead of spelling out. The bindings repeat a port's types
 /// in files that have none of its `use` lines, so they need the path.
-const IMPORTABLE: [(&str, &str); 2] = [
+const IMPORTABLE: [(&str, &str); 3] = [
     ("Value", "serde_json::Value"),
     ("HashMap", "std::collections::HashMap"),
+    ("PathBuf", "std::path::PathBuf"),
 ];
 
 /// `ty` with each bare [`IMPORTABLE`] name given its path. A name already behind a path
@@ -1545,6 +1546,27 @@ mod tests {
         assert!(null.contains("-> napi::Result<Option<String>>"), "{null}");
         assert!(!null.contains("Either"), "{null}");
         assert!(undefined.contains("Either<String, ()>"), "{undefined}");
+    }
+
+    #[test]
+    fn a_path_a_port_imports_is_read_with_its_path() {
+        let api = parse_port(
+            "use std::path::PathBuf;\n\n/// Port of `locate`.\n\
+             pub fn locate(start: PathBuf, roots: Vec<PathBuf>) -> Result<Option<PathBuf>, String> {\n    todo!()\n}\n",
+        );
+        let locate = &api.functions[0];
+        assert_eq!(locate.params[0].1, "std::path::PathBuf");
+        assert_eq!(locate.params[1].1, "Vec<std::path::PathBuf>");
+        assert_eq!(locate.ret, "Option<std::path::PathBuf>");
+        // Spelled with its path already, or defined by the port: left alone.
+        let spelled = parse_port(
+            "/// Port of `a`.\npub fn a(p: std::path::PathBuf) -> Result<(), String> {\n    todo!()\n}\n",
+        );
+        assert_eq!(spelled.functions[0].params[0].1, "std::path::PathBuf");
+        let own = parse_port(
+            "pub struct PathBuf {\n    pub n: i64,\n}\n\n/// Port of `b`.\npub fn b(p: PathBuf) -> Result<(), String> {\n    todo!()\n}\n",
+        );
+        assert_eq!(own.functions[0].params[0].1, "PathBuf");
     }
 
     #[test]

@@ -40,47 +40,242 @@ fn opens_a_block(line: &str) -> bool {
             .any(|kw| line.starts_with(kw))
 }
 
+/// The structural braces of a Ruby line in source order: `(byte offset, brace)` pairs,
+/// ignoring braces inside quoted strings or after a `#` comment, so a path like
+/// `"vendor/{x}"` or a trailing `# }` opens and closes nothing. A `group` written with
+/// braces ends at its matching `}`; reading the delimiters in source order lets a `}`
+/// that precedes a later `{` on one line close its group before the new frame opens.
+fn brace_events(line: &str) -> Vec<(usize, char)> {
+    let mut events = Vec::new();
+    let mut quote = None;
+    let mut chars = line.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if let Some(q) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '#' => break,
+            '\'' | '"' => quote = Some(c),
+            '{' | '}' => events.push((i, c)),
+            _ => {}
+        }
+    }
+    events
+}
+
+/// The gem names called with `gem` in a fragment of a line (inside a one-line block):
+/// only calls in executable tokens count, so the contents of comments and of unrelated
+/// strings are skipped, while a real call's own string argument is read.
+fn inline_gems(body: &str) -> Vec<String> {
+    let chars: Vec<(usize, char)> = body.char_indices().collect();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let (pos, c) = chars[i];
+        if c == '#' {
+            break;
+        }
+        if c == '\'' || c == '"' {
+            let q = c;
+            i += 1;
+            while i < chars.len() {
+                let ch = chars[i].1;
+                i += 1;
+                if ch == '\\' {
+                    i += 1;
+                } else if ch == q {
+                    break;
+                }
+            }
+            continue;
+        }
+        if body[pos..].starts_with("gem")
+            && (pos == 0 || !word(body[..pos].chars().next_back().unwrap_or_default()))
+            && chars.get(i + 3).is_none_or(|(_, next)| !word(*next))
+        {
+            let mut j = i + 3;
+            while j < chars.len() && chars[j].1.is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && chars[j].1 == '(' {
+                j += 1;
+                while j < chars.len() && chars[j].1.is_whitespace() {
+                    j += 1;
+                }
+            }
+            if j < chars.len() && (chars[j].1 == '\'' || chars[j].1 == '"') {
+                let q = chars[j].1;
+                j += 1;
+                let mut name = String::new();
+                while j < chars.len() {
+                    let ch = chars[j].1;
+                    j += 1;
+                    if ch == '\\' && j < chars.len() {
+                        name.push(chars[j].1);
+                        j += 1;
+                    } else if ch == q {
+                        break;
+                    } else {
+                        name.push(ch);
+                    }
+                }
+                if !name.is_empty() {
+                    out.push(name);
+                }
+                i = j;
+                continue;
+            }
+            i += 3;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The part of a Ruby line before its comment, with quoted strings kept whole, so an
+/// opener is judged on the code alone (`group(:test) do # test tools` opens its block).
+fn code_before_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut chars = line.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if let Some(q) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '#' => return &line[..i],
+            '\'' | '"' => quote = Some(c),
+            _ => {}
+        }
+    }
+    line
+}
+
+/// Whether the `{` that follows `before` opens a `group` body: a `group` call
+/// (`group :test`, `group(:test)`) since the last delimiter marks it. A `do` group's
+/// braces are ordinary hash frames, and a `group` inside a quoted string or after a
+/// `#` is not a call.
+fn is_group_opener(before: &str, do_block: bool) -> bool {
+    if do_block {
+        return false;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut quote = None;
+    let mut chars = before.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if let Some(q) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '#' => break,
+            '\'' | '"' => quote = Some(c),
+            'g' if before[i..].starts_with("group") => {
+                let before_ok = i == 0 || !word(before[..i].chars().next_back().unwrap_or(' '));
+                let after = before[i + 5..].chars().next();
+                if before_ok && after.is_none_or(|n| !word(n)) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The `gem` calls in one stretch of a line (between two structural braces), read with
+/// the group context of that stretch. `inline_gems` skips comments and unrelated strings,
+/// so a decoy `gem` in a quoted string does not count.
+fn add_segment_gems(segment: &str, in_group: bool, deps: &mut Vec<String>, dev: &mut Vec<String>) {
+    for name in inline_gems(segment) {
+        if in_group {
+            dev.push(name);
+        } else {
+            deps.push(name);
+        }
+    }
+}
+
+fn any_group(do_frames: &[bool], brace_frames: &[bool]) -> bool {
+    do_frames.iter().any(|f| *f) || brace_frames.iter().any(|f| *f)
+}
+
 /// `spec.add_dependency "name"` and `gem "name"` lines. A gem inside a `group` block is a
-/// development one. Blocks nest (`platform :mri do ... end`), so the group ends at its own `end`,
-/// not at the first one: otherwise every gem after a nested block is read as a runtime dependency.
+/// development one. Blocks nest (`platform :mri do ... end`), so the group ends at its own
+/// `end`, not at the first one: otherwise every gem after a nested block is read as a runtime
+/// dependency. A group written with braces ends at its matching `}` instead.
 fn gem_names(text: &str) -> (Vec<String>, Vec<String>) {
-    static PATTERNS: std::sync::OnceLock<(regex::Regex, regex::Regex)> = std::sync::OnceLock::new();
-    let (gem, spec) = PATTERNS.get_or_init(|| {
-        (
-            regex::Regex::new(r#"^gem\s*\(?\s*['"]([^'"]+)['"]"#).expect("valid regex"),
-            regex::Regex::new(
-                r#"\badd_(runtime_|development_)?dependency\s*\(?\s*['"]([^'"]+)['"]"#,
-            )
-            .expect("valid regex"),
-        )
+    static SPEC: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let spec = SPEC.get_or_init(|| {
+        regex::Regex::new(r#"\badd_(runtime_|development_)?dependency\s*\(?\s*['"]([^'"]+)['"]"#)
+            .expect("valid regex")
     });
     let (mut deps, mut dev) = (Vec::new(), Vec::new());
-    let mut depth = 0usize;
-    let mut group_at: Option<usize> = None;
+    // One frame per open block, `true` for a `group` frame: `do`/`end` frames and brace
+    // frames are separate stacks, since each closer ends only its own kind. A stack, not a
+    // single marker, so a nested `group` never replaces the enclosing one, and closing
+    // the inner group leaves the outer one active.
+    let mut do_frames: Vec<bool> = Vec::new();
+    let mut brace_frames: Vec<bool> = Vec::new();
     for line in text.lines() {
         let t = line.trim();
         if t.starts_with('#') {
             continue;
         }
-        if t.starts_with("group ") || t.starts_with("group(") {
-            group_at = Some(depth);
-        }
-        if opens_a_block(t) {
-            depth += 1;
-        }
+        let events = brace_events(t);
+        let group_line = t.starts_with("group ") || t.starts_with("group(");
+        // The actual delimiter decides the frame: a group whose line carries a trailing
+        // options hash and a `do` is a `do` group, and its balanced hash braces are
+        // ordinary frames that open and close on the same line.
+        let do_block = opens_a_block(code_before_comment(t).trim_end());
         if t == "end" || t.starts_with("end ") {
-            depth = depth.saturating_sub(1);
-            if group_at.is_some_and(|at| depth <= at) {
-                group_at = None;
-            }
+            do_frames.pop();
         }
-        if let Some(c) = gem.captures(t) {
-            if group_at.is_some() {
-                dev.push(c[1].to_string());
+        if do_block {
+            do_frames.push(group_line);
+        }
+        // Walk the delimiters in source order: a `}` closes the active group before a
+        // later `{` on the same line opens a new frame. The gems in each stretch of code
+        // are read with the group context of that stretch, so a one-line group's body is
+        // development-only while a statement after its `}` (`gem "rack"`) is a runtime
+        // dependency, and a second group on the line keeps its own body in its frame.
+        let mut cursor = 0usize;
+        for (pos, brace) in &events {
+            let segment = &t[cursor..*pos];
+            add_segment_gems(
+                segment,
+                any_group(&do_frames, &brace_frames),
+                &mut deps,
+                &mut dev,
+            );
+            if *brace == '{' {
+                brace_frames.push(is_group_opener(segment, do_block));
             } else {
-                deps.push(c[1].to_string());
+                brace_frames.pop();
             }
+            cursor = *pos + 1;
         }
+        add_segment_gems(
+            &t[cursor..],
+            any_group(&do_frames, &brace_frames),
+            &mut deps,
+            &mut dev,
+        );
         if let Some(c) = spec.captures(t) {
             if c.get(1).is_some_and(|m| m.as_str() == "development_") {
                 dev.push(c[2].to_string());
@@ -874,6 +1069,67 @@ gem "rack"
         let (deps, dev) = gem_names(gemfile);
         assert_eq!(deps, ["rake", "rack"]);
         assert_eq!(dev, ["rspec", "factory_bot", "minitest"]);
+    }
+
+    #[test]
+    fn grouped_gems_in_brace_group_go_to_dev_deps() {
+        let gemfile = r#"source "https://rubygems.org"
+group :test {
+  gem "rspec"
+}
+gem "rake"
+group(:test) {
+  gem "minitest" # }
+  gem "strung", path: "vendor/{strung}"
+}
+group(:test) { gem "inline" }
+group(:test) { puts "gem \"decoy\""; gem "real" }
+group(:test) { gem "noted" } # gem "fake"
+group :test, { require: false } do
+  gem "hashdo"
+end
+group(:test) do # test tools
+  gem "commented"
+end
+group :test {
+  group(:development) {
+    gem "nested"
+  }
+  gem "outer"
+}
+gem "rack"
+"#;
+        let (deps, dev) = gem_names(gemfile);
+        assert_eq!(deps, ["rake", "rack"]);
+        assert_eq!(
+            dev,
+            [
+                "rspec",
+                "minitest",
+                "strung",
+                "inline",
+                "real",
+                "noted",
+                "hashdo",
+                "commented",
+                "nested",
+                "outer"
+            ]
+        );
+    }
+
+    #[test]
+    fn inline_group_body_stops_at_its_brace_and_later_statements_are_runtime() {
+        let gemfile = r#"source "https://rubygems.org"
+group(:test) { gem "inline" } gem "rack"
+group(:a) { gem "a" } group(:b) { gem "b" } gem "rack2"
+group :test {
+  gem "first"
+} group :dev { gem "second" } gem "rack3"
+"#;
+        let (deps, dev) = gem_names(gemfile);
+        assert_eq!(deps, ["rack", "rack2", "rack3"]);
+        assert_eq!(dev, ["inline", "a", "b", "first", "second"]);
     }
 
     #[test]
