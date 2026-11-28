@@ -3,7 +3,7 @@
 ## Unreleased
 
 - `gate`'s `unsafe` check says `no unsafe code` for zero uses and reports one documented use in the
-  singular (#857).
+  singular (#857, #909 by @SPD-RYUK).
 - CLI help and MCP initialization instructions tell users to skip `shadow` for PHP, C#,
   PowerShell, and Swift units (#874, #907 by @SPD-RYUK).
 - When a profile finds no hot functions, `go` suggests a workload that spends more time in the
