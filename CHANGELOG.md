@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `gate`'s `unsafe` check says `no unsafe code` for zero uses and reports one documented use in the
+  singular (#857).
 - `record --sandbox` and `app record --sandbox` (MCP `record` and `app_record`: `sandbox`) run
   the original with no network, its repository read-only and CPU and memory limits:
   bubblewrap on Linux (`--unshare-net`, the file system read-only apart from the run's scratch

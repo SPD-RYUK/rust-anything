@@ -1176,7 +1176,11 @@ pub fn rust_checks(crate_dir: &Path, target_dir: &Path) -> Vec<Check> {
 }
 
 fn unsafe_pass_detail(explained: usize) -> String {
-    format!("{explained} unsafe uses, each with a `// SAFETY:` comment")
+    match explained {
+        0 => "no unsafe code".into(),
+        1 => "1 unsafe use, with a `// SAFETY:` comment".into(),
+        _ => format!("{explained} unsafe uses, each with a `// SAFETY:` comment"),
+    }
 }
 
 /// No function in `src/port.rs` is still `unimplemented!`.
