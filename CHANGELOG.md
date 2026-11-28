@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `diff --profile android` on a crate that is not Java or Kotlin says `--profile android needs a
+  JVM crate`, not that on-device recording does (#849, #894 by @SPD-RYUK).
 - `record`'s coverage line says "1 more file" instead of "1 more files" (#886, #919 by
   @Harsh28-raj).
 - The report card counts one recorded case in the singular in its headline and label (#887, #890
