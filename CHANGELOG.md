@@ -3,7 +3,7 @@
 ## Unreleased
 
 - CLI help and MCP initialization instructions tell users to skip `shadow` for PHP, C#,
-  PowerShell, and Swift units (#874).
+  PowerShell, and Swift units (#874, #907 by @SPD-RYUK).
 - When a profile finds no hot functions, `go` suggests a workload that spends more time in the
   repository's own code (#852, #905 by @SPD-RYUK).
 - `package --dry-run` says what it counts: "Would write 12 files for add-rs@1.0.0", and "1 file"
