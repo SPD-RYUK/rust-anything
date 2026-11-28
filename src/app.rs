@@ -1443,7 +1443,7 @@ fn read_inputs(path: &Path) -> Result<Vec<(Option<String>, Case)>> {
             continue;
         }
         let input: Input = serde_json::from_str(line)
-            .with_context(|| format!("{}:{}: expected {{\"args\": [...], \"stdin\": ..., \"env\": {{...}}, \"files\": {{path: text}}}}", path.display(), n + 1))?;
+            .with_context(|| format!("{}:{}: expected {{\"name\": ..., \"args\": [...], \"stdin\": ..., \"env\": {{...}}, \"files\": {{path: text}}, \"remove\": [paths]}}; \"remove\" deletes paths from the --fresh copy before the case runs", path.display(), n + 1))?;
         let mut case = Case::new(input.args);
         case.stdin = input.stdin.map(String::into_bytes);
         case.env = input.env;
@@ -1681,6 +1681,10 @@ pub struct RecordOutcome {
     pub cases: usize,
     pub examples: usize,
     pub inputs: usize,
+    /// Runs with no arguments, recorded because no examples or inputs were found (the
+    /// `no-args` case).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub no_args: usize,
     pub traps: usize,
     /// Unique traps dropped after hitting `MAX_TRAPS`.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -2214,9 +2218,12 @@ pub fn record(opts: &RecordOptions) -> Result<RecordOutcome> {
             bases.push(case);
         }
     }
+    let mut no_args_fallback = false;
     if bases.is_empty() {
         let case = Case::new(Vec::new());
-        push("example", 1, Some("no-args".to_string()), case.clone());
+        if push("example", 1, Some("no-args".to_string()), case.clone()) {
+            no_args_fallback = true;
+        }
         bases.push(case);
     }
     let mut traps_dropped = 0usize;
@@ -2230,6 +2237,13 @@ pub fn record(opts: &RecordOptions) -> Result<RecordOutcome> {
         }
     }
 
+    // The fallback went into an empty `planned`, so it is its first entry; read it only now that
+    // the last `push` (which borrows `planned` mutably) is done.
+    let no_args_name = if no_args_fallback {
+        planned.first().map(|(name, _)| name.clone())
+    } else {
+        None
+    };
     let timeout = Duration::from_secs(config.timeout_secs);
     let effects = config.effects.as_ref();
     let base = crate::http::snapshot_to(&repo, &config.fresh, &cases_dir(&repo).join(FRESH_DIR))?;
@@ -2268,6 +2282,7 @@ pub fn record(opts: &RecordOptions) -> Result<RecordOutcome> {
         cases: 0,
         examples: counts[0],
         inputs: counts[1],
+        no_args: 0,
         traps: counts[2],
         traps_dropped,
         noisy: Vec::new(),
@@ -2286,6 +2301,9 @@ pub fn record(opts: &RecordOptions) -> Result<RecordOutcome> {
         }
         let rec = settle(&norm, case, &one, &two);
         write_case(&dir, &config.name, name, case, &rec)?;
+        if no_args_name.as_deref() == Some(name.as_str()) {
+            outcome.no_args += 1;
+        }
         outcome.cases += 1;
         outcome.recorded.push(name.clone());
         if !rec.noise.is_empty() {
@@ -3099,6 +3117,11 @@ fn replay_cases(opts: &ReplayOptions) -> Result<ReplayOutcome> {
         "--timeout must be at least 1 second (saved timeout_secs in {CONFIG_FILE} is 0; pass --timeout 1 or higher)"
     );
     let timeout = Duration::from_secs(timeout_secs);
+    ensure!(
+        opts.port.is_none() || config.http.is_some(),
+        "--port is for server recordings (`app record --http`), but the recording in {} is a CLI's",
+        dir.display()
+    );
     if config.http.is_some() {
         return crate::http::replay(
             &repo, &config, &norm, &command, opts.port, opts.case, timeout,

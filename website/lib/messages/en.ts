@@ -138,7 +138,7 @@ export const en = {
       { v: '10', unit: '', k: 'languages: eight with verified ports, Kotlin and PowerShell tested end to end' },
     ],
     installTitle: 'Install',
-    installDesc: 'Install the CLI, then register the MCP server and the workflow skill with Claude Code, Codex, Cursor and Gemini CLI.',
+    installDesc: 'Install the CLI, then register the MCP server and the workflow skill with Claude Code, Codex, Cursor, Gemini CLI and OpenCode.',
     installNote: 'Prebuilt binaries for macOS, Linux and Windows are on each [GitHub release]({releases}).',
     agentPrompt: 'Install Rust Anything: run `cargo install rust-anything`, then `rust-anything setup`.',
     agentRestart: 'Tell me when to restart you.',
@@ -279,7 +279,7 @@ export const en = {
     ],
     installSteps: [
       { title: 'Install the CLI', text: 'One binary from cargo or npm.' },
-      { title: 'Register it with your agent', text: '`rust-anything setup` adds the MCP server and the skill to Claude Code, Codex, Cursor and Gemini CLI.' },
+      { title: 'Register it with your agent', text: '`rust-anything setup` adds the MCP server and the skill to Claude Code, Codex, Cursor, Gemini CLI and OpenCode.' },
       { title: 'Ask for the slow part', text: 'Say "move the hot loop to Rust". The agent profiles, records, ports and stops when every case matches.' },
     ],
     commands: [

@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Installazione",
-    "installDesc": "Installa la CLI, poi registra il server MCP e la skill di flusso di lavoro in Claude Code, Codex, Cursor e Gemini CLI.",
+    "installDesc": "Installa la CLI, poi registra il server MCP e la skill di flusso di lavoro in Claude Code, Codex, Cursor, Gemini CLI e OpenCode.",
     "installNote": "I binari precompilati per macOS, Linux e Windows sono allegati a ogni [release su GitHub]({releases}).",
     "agentPrompt": "Installa Rust Anything: esegui `cargo install rust-anything`, poi `rust-anything setup`.",
     "agentRestart": "Dimmi quando devo riavviarti.",

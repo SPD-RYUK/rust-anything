@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "Установка",
-    "installDesc": "Установите CLI, затем зарегистрируйте MCP-сервер и навык рабочего процесса в Claude Code, Codex, Cursor и Gemini CLI.",
+    "installDesc": "Установите CLI, затем зарегистрируйте MCP-сервер и навык рабочего процесса в Claude Code, Codex, Cursor, Gemini CLI и OpenCode.",
     "installNote": "Готовые бинарники для macOS, Linux и Windows есть в каждом [релизе на GitHub]({releases}).",
     "agentPrompt": "Установи Rust Anything: выполни `cargo install rust-anything`, затем `rust-anything setup`.",
     "agentRestart": "Скажи, когда тебя перезапустить.",

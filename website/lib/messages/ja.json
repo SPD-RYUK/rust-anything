@@ -136,7 +136,7 @@
       }
     ],
     "installTitle": "インストール",
-    "installDesc": "CLI をインストールし、MCP サーバーとワークフロースキルを Claude Code、Codex、Cursor、Gemini CLI に登録します。",
+    "installDesc": "CLI をインストールし、MCP サーバーとワークフロースキルを Claude Code、Codex、Cursor、Gemini CLI、OpenCode に登録します。",
     "installNote": "macOS、Linux、Windows 向けのビルド済みバイナリは各 [GitHub リリース]({releases}) にあります。",
     "agentPrompt": "Rust Anything をインストールして: `cargo install rust-anything` を実行し、次に `rust-anything setup` を実行してください。",
     "agentRestart": "再起動が必要なタイミングを教えてください。",
