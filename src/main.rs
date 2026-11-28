@@ -27,7 +27,7 @@ use rust_anything::{
     name = "rust-anything",
     version,
     about = "Rewrite TypeScript/JavaScript, Python, C, Go, Ruby, Java, Kotlin, PHP, C#, PowerShell or Swift apps in Rust, one verified piece at a time",
-    after_help = "Loop per unit: analyze -> bridge -> record -> port src/port.rs -> build -> diff -> shadow -> gate\nOnly the slow part: go --agent claude -- <workload>, then enable/disable and report"
+    after_help = "Loop per unit: analyze -> bridge -> record -> port src/port.rs -> build -> diff -> shadow (skip for PHP, C#, PowerShell, and Swift) -> gate\nOnly the slow part: go --agent claude -- <workload>, then enable/disable and report"
 )]
 struct Cli {
     #[command(subcommand)]

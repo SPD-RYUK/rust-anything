@@ -173,9 +173,9 @@ pub fn handle(request: &Value) -> Option<Value> {
             "serverInfo": { "name": "rust-anything", "version": env!("CARGO_PKG_VERSION") },
             "instructions": "Rewrite TypeScript/JavaScript, Python, C, Go, Ruby, Java, Kotlin, PHP, C#, \
                 PowerShell or Swift apps in Rust, one verified piece at a time. Loop per unit: analyze -> bridge -> \
-                record -> (port src/port.rs) -> build -> diff -> shadow -> gate. Never mark a port done \
-                before gate passes. Read rust/RULES.md (`rules`) before porting; when the user corrects \
-                behavior, add it with `rules`.",
+                record -> (port src/port.rs) -> build -> diff -> shadow (skip for PHP, C#, PowerShell, \
+                and Swift) -> gate. Never mark a port done before gate passes. Read rust/RULES.md (`rules`) \
+                before porting; when the user corrects behavior, add it with `rules`.",
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tools() }),
