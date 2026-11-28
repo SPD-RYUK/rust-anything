@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- When a profile finds no hot functions, `go` suggests a workload that spends more time in the
+  repository's own code (#852).
 - `record --sandbox` and `app record --sandbox` (MCP `record` and `app_record`: `sandbox`) run
   the original with no network, its repository read-only and CPU and memory limits:
   bubblewrap on Linux (`--unshare-net`, the file system read-only apart from the run's scratch
