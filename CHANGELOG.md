@@ -3,7 +3,7 @@
 ## Unreleased
 
 - When a profile finds no hot functions, `go` suggests a workload that spends more time in the
-  repository's own code (#852).
+  repository's own code (#852, #905 by @SPD-RYUK).
 - `package --dry-run` says what it counts: "Would write 12 files for add-rs@1.0.0", and "1 file"
   for one (#841, #913 by @aaas72).
 - `diff --profile android` on a crate that is not Java or Kotlin says `--profile android needs a
